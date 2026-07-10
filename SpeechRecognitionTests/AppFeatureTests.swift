@@ -11,11 +11,19 @@ struct AppFeatureTests {
     @Shared(.sessions) var sessions = [
       Session(id: UUID(0), startDate: Date(timeIntervalSince1970: 0), state: .awaitingSummarization)
     ]
-    let store = TestStore(initialState: AppFeature.State()) {
+    var state = AppFeature.State()
+    state.isConnected = false
+    let summarizeCalls = LockIsolated(0)
+    let store = TestStore(initialState: state) {
       AppFeature()
+    } withDependencies: {
+      $0.anthropicClient.summarize = { _ in
+        summarizeCalls.withValue { $0 += 1 }
+        return SummarizationResult(summary: "Unexpected", consentUtterance: nil)
+      }
     }
-    // `anthropicClient.summarize` is unimplemented; the test fails if the queue runs offline.
     await store.send(.drainQueue)
+    #expect(summarizeCalls.value == 0)
   }
 
   @Test
@@ -99,8 +107,10 @@ struct AppFeatureTests {
   @Test
   func multipleQueuedSessionsDrainSequentially() async {
     @Shared(.sessions) var sessions = [
-      Session(id: UUID(0), startDate: Date(timeIntervalSince1970: 0), state: .awaitingSummarization),
-      Session(id: UUID(1), startDate: Date(timeIntervalSince1970: 60), state: .awaitingSummarization),
+      Session(
+        id: UUID(0), startDate: Date(timeIntervalSince1970: 0), state: .awaitingSummarization),
+      Session(
+        id: UUID(1), startDate: Date(timeIntervalSince1970: 60), state: .awaitingSummarization),
     ]
     let summarized = LockIsolated<[Session.ID]>([])
     let store = TestStore(initialState: AppFeature.State()) {
@@ -138,7 +148,8 @@ struct AppFeatureTests {
     @Shared(.sessions) var sessions = [
       Session(id: recordingID, startDate: Date(timeIntervalSince1970: 0), state: .recording),
       Session(id: transcribingID, startDate: Date(timeIntervalSince1970: 60), state: .transcribing),
-      Session(id: queuedID, startDate: Date(timeIntervalSince1970: 120), state: .awaitingSummarization),
+      Session(
+        id: queuedID, startDate: Date(timeIntervalSince1970: 120), state: .awaitingSummarization),
     ]
     let events = LockIsolated<[String]>([])
     let store = TestStore(initialState: AppFeature.State()) {

@@ -79,7 +79,8 @@ struct InterviewFeatureTests {
         $0.ttsClient.stop = {}
         $0.speechClient.requestAuthorization = { .authorized }
         $0.speechClient.startTask = { _, _ in
-          let (stream, continuation) = AsyncThrowingStream
+          let (stream, continuation) =
+            AsyncThrowingStream
             .makeStream(of: SpeechRecognitionResult.self)
           sttContinuations.withValue { $0.append(continuation) }
           return stream
@@ -322,9 +323,11 @@ struct InterviewFeatureTests {
         isRetryable: false
       )
     }
-    // A retry tap on a non-retryable failure still re-sends (the button is hidden in the UI,
-    // and state remains consistent if it is somehow triggered) — but the guard requires a
-    // failure to be present, so this is a no-op after clearing.
+    let failure = store.state.failure
+    await store.send(.retryButtonTapped)
+    #expect(store.state.phase == .failed)
+    #expect(store.state.failure == failure)
+    #expect(harness.agentResults.value.isEmpty)
   }
 
   @Test

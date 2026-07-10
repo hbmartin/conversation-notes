@@ -114,23 +114,28 @@ extension AnthropicClient: TestDependencyKey {
         toolUse: nil
       ),
       {
-        let input = try! JSONValue(
-          parsing: """
-            {
-              "hcp_specialty": "Cardiology",
-              "topics_discussed": ["Phase 3 efficacy data"],
-              "key_scientific_questions": "Subgroup analysis methodology",
-              "unanswered_follow_ups": "None",
-              "med_info_requests": "None",
-              "adverse_event_reported": false,
-              "adverse_event_detail": "",
-              "off_label_discussed": false,
-              "off_label_detail": "",
-              "hcp_sentiment": "positive",
-              "commitments_next_steps": "Send subgroup analysis publication",
-              "follow_up_needed": true
-            }
-            """)
+        let input: JSONValue
+        do {
+          input = try JSONValue(
+            parsing: """
+              {
+                "hcp_specialty": "Cardiology",
+                "topics_discussed": ["Phase 3 efficacy data"],
+                "key_scientific_questions": "Subgroup analysis methodology",
+                "unanswered_follow_ups": "None",
+                "med_info_requests": "None",
+                "adverse_event_reported": false,
+                "adverse_event_detail": "",
+                "off_label_discussed": false,
+                "off_label_detail": "",
+                "hcp_sentiment": "positive",
+                "commitments_next_steps": "Send subgroup analysis publication",
+                "follow_up_needed": true
+              }
+              """)
+        } catch {
+          preconditionFailure("Invalid preview extraction: \(error)")
+        }
         return AssistantTurn(
           content: [.toolUse(id: "toolu_preview", name: "record_interview", input: input)],
           stopReason: .toolUse,
@@ -155,7 +160,8 @@ extension AnthropicClient: TestDependencyKey {
       interviewTurn: { _ in
         try await Task.sleep(for: .milliseconds(600))
         return scriptedTurns.withValue { turns in
-          turns.isEmpty ? AssistantTurn(content: [], stopReason: .endTurn, text: "", toolUse: nil)
+          turns.isEmpty
+            ? AssistantTurn(content: [], stopReason: .endTurn, text: "", toolUse: nil)
             : turns.removeFirst()
         }
       }

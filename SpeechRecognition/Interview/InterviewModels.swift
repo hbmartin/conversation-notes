@@ -88,40 +88,45 @@ enum InterviewAgent {
       (a) adverse events or product complaints and (b) off-label discussion. Until you call \
       this tool, your plain-text reply is the next question to ask.
       """,
-    inputSchema: try! JSONValue(
-      parsing: """
-        {
-          "type": "object",
-          "properties": {
-            "hcp_specialty": {"type": "string"},
-            "topics_discussed": {"type": "array", "items": {"type": "string"}},
-            "key_scientific_questions": {"type": "string"},
-            "unanswered_follow_ups": {"type": "string"},
-            "med_info_requests": {"type": "string"},
-            "adverse_event_reported": {"type": "boolean"},
-            "adverse_event_detail": {
-              "type": "string",
-              "description": "Details of the adverse event or product complaint; empty string if none"
-            },
-            "off_label_discussed": {"type": "boolean"},
-            "off_label_detail": {
-              "type": "string",
-              "description": "Details of the off-label discussion; empty string if none"
-            },
-            "hcp_sentiment": {"type": "string", "enum": ["positive", "neutral", "negative"]},
-            "commitments_next_steps": {"type": "string"},
-            "follow_up_needed": {"type": "boolean"}
-          },
-          "required": [
-            "hcp_specialty", "topics_discussed", "key_scientific_questions",
-            "unanswered_follow_ups", "med_info_requests", "adverse_event_reported",
-            "adverse_event_detail", "off_label_discussed", "off_label_detail",
-            "hcp_sentiment", "commitments_next_steps", "follow_up_needed"
-          ],
-          "additionalProperties": false
-        }
-        """
-    )
+    inputSchema: {
+      do {
+        return try JSONValue(
+          parsing: """
+            {
+              "type": "object",
+              "properties": {
+                "hcp_specialty": {"type": "string"},
+                "topics_discussed": {"type": "array", "items": {"type": "string"}},
+                "key_scientific_questions": {"type": "string"},
+                "unanswered_follow_ups": {"type": "string"},
+                "med_info_requests": {"type": "string"},
+                "adverse_event_reported": {"type": "boolean"},
+                "adverse_event_detail": {
+                  "type": "string",
+                  "description": "Details of the adverse event or product complaint; empty string if none"
+                },
+                "off_label_discussed": {"type": "boolean"},
+                "off_label_detail": {
+                  "type": "string",
+                  "description": "Details of the off-label discussion; empty string if none"
+                },
+                "hcp_sentiment": {"type": "string", "enum": ["positive", "neutral", "negative"]},
+                "commitments_next_steps": {"type": "string"},
+                "follow_up_needed": {"type": "boolean"}
+              },
+              "required": [
+                "hcp_specialty", "topics_discussed", "key_scientific_questions",
+                "unanswered_follow_ups", "med_info_requests", "adverse_event_reported",
+                "adverse_event_detail", "off_label_discussed", "off_label_detail",
+                "hcp_sentiment", "commitments_next_steps", "follow_up_needed"
+              ],
+              "additionalProperties": false
+            }
+            """)
+      } catch {
+        preconditionFailure("Invalid interview schema: \(error)")
+      }
+    }()
   )
 
   static func systemPrompt(summary: String) -> String {

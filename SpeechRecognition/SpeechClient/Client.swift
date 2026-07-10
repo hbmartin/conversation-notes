@@ -37,6 +37,7 @@ extension SpeechClient: TestDependencyKey {
       startTask: { _, _ in
         AsyncThrowingStream { continuation in
           Task {
+            defer { continuation.finish() }
             isRecording.setValue(true)
             var finalText = """
               Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor \
