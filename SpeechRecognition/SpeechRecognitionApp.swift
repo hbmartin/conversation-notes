@@ -3,14 +3,15 @@ import SwiftUI
 
 @main
 struct SpeechRecognitionApp: App {
-  static let store = Store(initialState: SpeechRecognition.State()) {
-    SpeechRecognition()
+  @MainActor
+  static let store = Store(initialState: AppFeature.State()) {
+    AppFeature()
       ._printChanges()
   }
 
   var body: some Scene {
     WindowGroup {
-      SpeechRecognitionView(store: Self.store)
+      AppView(store: Self.store)
     }
   }
 }

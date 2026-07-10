@@ -15,9 +15,9 @@ extension SpeechClient: DependencyKey {
           }
         }
       },
-      startTask: { request in
+      startTask: { request, recordingURL in
         let request = UncheckedSendable(request)
-        return await speech.startTask(request: request)
+        return await speech.startTask(request: request, recordingURL: recordingURL)
       }
     )
   }
@@ -27,16 +27,19 @@ private actor Speech {
   var audioEngine: AVAudioEngine? = nil
   var recognitionTask: SFSpeechRecognitionTask? = nil
   var recognitionContinuation: AsyncThrowingStream<SpeechRecognitionResult, any Error>.Continuation?
+  var recordingFile: AVAudioFile? = nil
 
   func finishTask() {
     self.audioEngine?.stop()
     self.audioEngine?.inputNode.removeTap(onBus: 0)
     self.recognitionTask?.finish()
     self.recognitionContinuation?.finish()
+    self.recordingFile = nil
   }
 
   func startTask(
-    request: UncheckedSendable<SFSpeechAudioBufferRecognitionRequest>
+    request: UncheckedSendable<SFSpeechAudioBufferRecognitionRequest>,
+    recordingURL: URL?
   ) -> AsyncThrowingStream<SpeechRecognitionResult, any Error> {
     let request = request.wrappedValue
 
@@ -44,7 +47,12 @@ private actor Speech {
       self.recognitionContinuation = continuation
       let audioSession = AVAudioSession.sharedInstance()
       do {
-        try audioSession.setCategory(.record, mode: .measurement, options: .duckOthers)
+        // One category for the whole interview: TTS playback and mic capture alternate every
+        // few seconds, and flapping the session between phases causes audible pops and stalls.
+        // Without `.defaultToSpeaker`, `.playAndRecord` routes TTS to the earpiece.
+        try audioSession.setCategory(
+          .playAndRecord, mode: .spokenAudio, options: [.duckOthers, .defaultToSpeaker]
+        )
         try audioSession.setActive(true, options: .notifyOthersOnDeactivation)
       } catch {
         continuation.finish(throwing: SpeechClient.Failure.couldntConfigureAudioSession)
@@ -64,6 +72,23 @@ private actor Speech {
         }
       }
 
+      guard let inputFormat = self.audioEngine?.inputNode.outputFormat(forBus: 0) else {
+        continuation.finish(throwing: SpeechClient.Failure.couldntStartAudioEngine)
+        return
+      }
+
+      // Only one tap can be installed per bus, so retained interview-answer audio is written
+      // from inside the recognition tap.
+      if let recordingURL {
+        do {
+          self.recordingFile = try AVAudioFile(forWriting: recordingURL, settings: inputFormat.settings)
+        } catch {
+          continuation.finish(throwing: SpeechClient.Failure.couldntWriteRecording)
+          return
+        }
+      }
+      let recordingFile = self.recordingFile
+
       continuation.onTermination = {
         [
           speechRecognizer = UncheckedSendable(speechRecognizer),
@@ -81,9 +106,10 @@ private actor Speech {
       self.audioEngine?.inputNode.installTap(
         onBus: 0,
         bufferSize: 1024,
-        format: self.audioEngine?.inputNode.outputFormat(forBus: 0)
+        format: inputFormat
       ) { buffer, when in
         request.append(buffer)
+        try? recordingFile?.write(from: buffer)
       }
 
       self.audioEngine?.prepare()
