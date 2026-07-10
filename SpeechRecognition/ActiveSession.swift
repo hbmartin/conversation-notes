@@ -92,19 +92,25 @@ struct ActiveSession {
               await send(.permissionDenied)
               return
             }
-            async let recording: Void = send(
-              .recorderDidFinish(
-                Result {
-                  try await self.audioRecorder.startRecording(
+            await withTaskGroup(of: Void.self) { group in
+              group.addTask {
+                do {
+                  let result = try await self.audioRecorder.startRecording(
                     url: self.audioStorage.recordingURL(id)
                   )
+                  await send(.recorderDidFinish(.success(result)))
+                } catch {
+                  await send(.recorderDidFinish(.failure(error)))
                 }
-              )
-            )
-            for await _ in self.clock.timer(interval: .seconds(1)) {
-              await send(.timerTicked)
+              }
+              group.addTask {
+                for await _ in self.clock.timer(interval: .seconds(1)) {
+                  await send(.timerTicked)
+                }
+              }
+              _ = await group.next()
+              group.cancelAll()
             }
-            await recording
           }
         )
 
@@ -268,7 +274,8 @@ struct ActiveSession {
     state.phase = .failed("Recording interrupted")
     state.$session.withLock {
       $0.state = .lost
-      $0.lossReason = "The recording was interrupted (for example by a phone call) and could not be recovered."
+      $0.lossReason =
+        "The recording was interrupted (for example by a phone call) and could not be recovered."
     }
     state.alert = AlertState {
       TextState("Recording interrupted")

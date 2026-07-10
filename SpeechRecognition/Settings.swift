@@ -7,6 +7,7 @@ struct Settings {
   struct State: Equatable {
     var apiKey = ""
     var didSave = false
+    var errorMessage: String?
   }
 
   enum Action: BindableAction {
@@ -24,6 +25,7 @@ struct Settings {
       switch action {
       case .binding:
         state.didSave = false
+        state.errorMessage = nil
         return .none
 
       case .onAppear:
@@ -31,14 +33,23 @@ struct Settings {
         return .none
 
       case .saveTapped:
-        try? self.apiKeyClient.save(state.apiKey)
-        state.didSave = true
+        do {
+          try self.apiKeyClient.save(state.apiKey)
+          state.didSave = true
+        } catch {
+          state.didSave = false
+          state.errorMessage = "The API key could not be saved."
+        }
         return .none
 
       case .deleteTapped:
-        try? self.apiKeyClient.delete()
-        state.apiKey = ""
-        state.didSave = false
+        do {
+          try self.apiKeyClient.delete()
+          state.apiKey = ""
+          state.didSave = false
+        } catch {
+          state.errorMessage = "The API key could not be removed."
+        }
         return .none
       }
     }
@@ -70,6 +81,9 @@ struct SettingsView: View {
         if store.didSave {
           Label("Saved", systemImage: "checkmark.circle.fill")
             .foregroundStyle(.green)
+        }
+        if let errorMessage = store.errorMessage {
+          Text(errorMessage).foregroundStyle(.red)
         }
         Button("Remove Key", role: .destructive) {
           store.send(.deleteTapped)

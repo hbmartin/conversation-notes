@@ -3,7 +3,9 @@ import Foundation
 
 extension AnthropicClient: DependencyKey {
   static var liveValue: Self {
-    @Sendable func post(_ body: MessagesRequest) async throws -> MessagesResponse {
+    @Sendable func post(
+      _ body: MessagesRequest, timeout: TimeInterval
+    ) async throws -> MessagesResponse {
       @Dependency(\.apiKeyClient) var apiKeyClient
       guard let key = try? apiKeyClient.load(), !key.isEmpty else {
         throw AnthropicClientError.missingAPIKey
@@ -14,13 +16,19 @@ extension AnthropicClient: DependencyKey {
       request.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
       request.setValue("application/json", forHTTPHeaderField: "content-type")
       // Non-streaming; large summarization responses can run long.
-      request.timeoutInterval = 300
+      request.timeoutInterval = timeout
       request.httpBody = try JSONEncoder().encode(body)
 
       var lastError = AnthropicClientError.network
       for attempt in 0..<3 {
         if attempt > 0 {
-          try await Task.sleep(for: .seconds(Double(1 << attempt) * Double.random(in: 0.5...1)))
+          let retryDelay: Double
+          if case .rateLimited(let seconds) = lastError, let seconds {
+            retryDelay = Double(seconds)
+          } else {
+            retryDelay = Double(1 << attempt) * Double.random(in: 0.5...1)
+          }
+          try await Task.sleep(for: .seconds(retryDelay))
         }
         do {
           let data: Data
@@ -48,7 +56,8 @@ extension AnthropicClient: DependencyKey {
             outputConfig: OutputConfig(
               format: OutputConfig.Format(schema: Self.summaryOutputSchema)
             )
-          )
+          ),
+          timeout: 300
         )
         switch response.stopReason {
         case .refusal: throw AnthropicClientError.refused
@@ -72,7 +81,8 @@ extension AnthropicClient: DependencyKey {
             system: turnRequest.system,
             messages: turnRequest.messages,
             tools: turnRequest.tools
-          )
+          ),
+          timeout: 60
         )
         switch response.stopReason {
         case .refusal: throw AnthropicClientError.refused
@@ -125,23 +135,28 @@ extension AnthropicClient: DependencyKey {
     transcript, extract that sentence verbatim; otherwise null.
     """
 
-  static let summaryOutputSchema = try! JSONValue(
-    parsing: """
-      {
-        "type": "object",
-        "properties": {
-          "summary": {
-            "type": "string",
-            "description": "Compliance-safe prose summary with all PHI and patient identifiers removed"
-          },
-          "consent_utterance": {
-            "anyOf": [{"type": "string"}, {"type": "null"}],
-            "description": "The HCP's verbatim consent-to-record statement, or null if none was found"
+  static let summaryOutputSchema: JSONValue = {
+    do {
+      return try JSONValue(
+        parsing: """
+          {
+            "type": "object",
+            "properties": {
+              "summary": {
+                "type": "string",
+                "description": "Compliance-safe prose summary with all PHI and patient identifiers removed"
+              },
+              "consent_utterance": {
+                "anyOf": [{"type": "string"}, {"type": "null"}],
+                "description": "The HCP's verbatim consent-to-record statement, or null if none was found"
+              }
+            },
+            "required": ["summary", "consent_utterance"],
+            "additionalProperties": false
           }
-        },
-        "required": ["summary", "consent_utterance"],
-        "additionalProperties": false
-      }
-      """
-  )
+          """)
+    } catch {
+      preconditionFailure("Invalid summary schema: \(error)")
+    }
+  }()
 }

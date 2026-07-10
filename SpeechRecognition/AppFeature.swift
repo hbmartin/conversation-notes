@@ -21,6 +21,7 @@ struct AppFeature {
     @Presents var alert: AlertState<Action.Alert>?
     var isConnected = false
     var summarizeAttempt = 0
+    var blockedSummarizationIDs: Set<Session.ID> = []
   }
 
   enum Action {
@@ -75,6 +76,11 @@ struct AppFeature {
           }
         }
         let validIDs = Set(state.sessions.ids)
+        let summarizedIDs = Set(
+          state.sessions
+            .filter { [.summaryReady, .interviewing, .saved, .lost].contains($0.state) }
+            .map(\.id)
+        )
         return .merge(
           .run { send in
             try? await self.audioStorage.purgeAllRecordings()
@@ -82,8 +88,10 @@ struct AppFeature {
               try? await self.transcriptVault.destroy(id)
             }
             // Orphan sweep: vault files with no matching session.
-            for id in await self.transcriptVault.pendingIDs() where !validIDs.contains(id) {
-              try? await self.transcriptVault.destroy(id)
+            for id in await self.transcriptVault.pendingIDs() {
+              if !validIDs.contains(id) || summarizedIDs.contains(id) {
+                try? await self.transcriptVault.destroy(id)
+              }
             }
             await send(.drainQueue)
           },
@@ -116,14 +124,16 @@ struct AppFeature {
         state.isConnected = connected
         if connected, !wasConnected {
           state.summarizeAttempt = 0
-          return .send(.drainQueue)
+          return .merge(.cancel(id: CancelID.retry), .send(.drainQueue))
         }
         return .none
 
       case .drainQueue:
         guard
           state.isConnected,
-          let session = state.sessions.first(where: { $0.state == .awaitingSummarization })
+          let session = state.sessions.first(where: {
+            $0.state == .awaitingSummarization && !state.blockedSummarizationIDs.contains($0.id)
+          })
         else { return .none }
         return .run { [id = session.id] send in
           await send(
@@ -140,6 +150,7 @@ struct AppFeature {
 
       case .summarizationResponse(let id, .success(let result)):
         state.summarizeAttempt = 0
+        state.blockedSummarizationIDs.remove(id)
         state.$sessions.withLock { sessions in
           sessions[id: id]?.summary = result.summary
           sessions[id: id]?.consentUtterance = result.consentUtterance
@@ -151,7 +162,12 @@ struct AppFeature {
           await send(.transcriptDestroyed(id))
         }
 
-      case .summarizationResponse(_, .failure):
+      case .summarizationResponse(let id, .failure(let error)):
+        if let error = error as? AnthropicClientError, !error.isRetryable {
+          state.blockedSummarizationIDs.insert(id)
+          state.summarizeAttempt = 0
+          return .send(.drainQueue)
+        }
         // The transcript is intact in the vault; retry with capped exponential backoff.
         state.summarizeAttempt += 1
         let exponent = min(state.summarizeAttempt - 1, 6)
@@ -172,6 +188,7 @@ struct AppFeature {
           return .send(.drainQueue)
         case .retrySummarization:
           state.summarizeAttempt = 0
+          state.blockedSummarizationIDs.removeAll()
           return .send(.drainQueue)
         case .discarded(let id):
           state.activeSession = nil
@@ -194,6 +211,7 @@ struct AppFeature {
           return self.startInterview(state: &state, sessionID: id)
         case .retrySummarization:
           state.summarizeAttempt = 0
+          state.blockedSummarizationIDs.removeAll()
           return .send(.drainQueue)
         case .delete(let id):
           state.path.removeAll()
@@ -204,7 +222,8 @@ struct AppFeature {
           }
         }
 
-      case .path(.element(let pathID, action: .interview(.delegate(.interviewFinished(let record))))):
+      case .path(
+        .element(let pathID, action: .interview(.delegate(.interviewFinished(let record))))):
         state.$sessions.withLock { sessions in
           sessions[id: record.sessionID]?.interviewID = record.id
           sessions[id: record.sessionID]?.state = .saved
@@ -235,7 +254,9 @@ struct AppFeature {
       state.alert = AlertState {
         TextState("You're offline")
       } message: {
-        TextState("The interview needs a connection. It will be available from the session once you're back online.")
+        TextState(
+          "The interview needs a connection. It will be available from the session once you're back online."
+        )
       }
       return .none
     }

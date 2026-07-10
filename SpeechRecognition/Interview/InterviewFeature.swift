@@ -19,6 +19,7 @@ struct Interview {
     var turns: [InterviewTurn] = []
     var messages: [AnthropicMessage] = []
     var extraction: InterviewExtraction?
+    var pendingRecord: InterviewRecord?
     var failure: FailureState?
     var startedAt: Date?
 
@@ -42,6 +43,7 @@ struct Interview {
 
   enum Action {
     case task
+    case speechAuthorizationDenied
     case agentResponse(Result<AssistantTurn, any Error>)
     case questionSpoken
     case sttPartial(String)
@@ -50,7 +52,7 @@ struct Interview {
     case doneButtonTapped
     case answerCommitted(String)
     case closingSpoken
-    case saveFailed
+    case saveFailed(InterviewRecord)
     case retryButtonTapped
     case delegate(Delegate)
 
@@ -85,11 +87,22 @@ struct Interview {
         state.phase = .processing
         state.messages = [InterviewAgent.openingUserMessage]
         return .merge(
-          .run { _ in
-            _ = await self.speechClient.requestAuthorization()
+          .run { send in
+            guard await self.speechClient.requestAuthorization() == .authorized else {
+              await send(.speechAuthorizationDenied)
+              return
+            }
           },
           self.requestTurn(state)
         )
+
+      case .speechAuthorizationDenied:
+        state.phase = .failed
+        state.failure = State.FailureState(
+          message: "Speech recognition permission is required for the voice interview.",
+          isRetryable: false
+        )
+        return .none
 
       case .agentResponse(.success(let turn)):
         state.messages.append(AnthropicMessage(role: .assistant, content: turn.content))
@@ -111,7 +124,11 @@ struct Interview {
           state.phase = .finishing
           state.currentQuestion = InterviewAgent.closingRemark
           return .run { send in
-            try? await self.tts.speak(InterviewAgent.closingRemark)
+            do {
+              try await self.tts.speak(InterviewAgent.closingRemark)
+            } catch is CancellationError {
+              return
+            } catch {}
             await send(.closingSpoken)
           }
           .cancellable(id: CancelID.tts, cancelInFlight: true)
@@ -127,7 +144,11 @@ struct Interview {
         state.currentQuestion = turn.text
         state.phase = .speaking
         return .run { [question = turn.text] send in
-          try? await self.tts.speak(question)
+          do {
+            try await self.tts.speak(question)
+          } catch is CancellationError {
+            return
+          } catch {}
           await send(.questionSpoken)
         }
         .cancellable(id: CancelID.tts, cancelInFlight: true)
@@ -209,11 +230,12 @@ struct Interview {
           try self.artifacts.save(record)
           await send(.delegate(.interviewFinished(record)))
         } catch: { _, send in
-          await send(.saveFailed)
+          await send(.saveFailed(record))
         }
 
-      case .saveFailed:
+      case .saveFailed(let record):
         state.phase = .failed
+        state.pendingRecord = record
         state.failure = State.FailureState(
           message: "The interview could not be saved to disk.",
           isRetryable: true
@@ -232,11 +254,20 @@ struct Interview {
 
       case .retryButtonTapped:
         guard state.phase == .failed, let failure = state.failure else { return .none }
+        guard failure.isRetryable else { return .none }
         state.failure = nil
         if failure.resumesListening {
           // Re-enter listening for the same question; the message history is unchanged.
           state.phase = .speaking
           return .send(.questionSpoken)
+        }
+        if let record = state.pendingRecord {
+          return .run { send in
+            try self.artifacts.save(record)
+            await send(.delegate(.interviewFinished(record)))
+          } catch: { _, send in
+            await send(.saveFailed(record))
+          }
         }
         state.phase = .processing
         return self.requestTurn(state)
@@ -280,10 +311,13 @@ struct InterviewView: View {
           .foregroundStyle(.secondary)
 
       case .speaking, .listening, .finishing:
-        Image(systemName: store.phase == .listening ? "waveform.circle.fill" : "speaker.wave.2.circle.fill")
-          .font(.system(size: 56))
-          .foregroundStyle(store.phase == .listening ? .red : .blue)
-          .symbolEffect(.pulse, isActive: true)
+        Image(
+          systemName: store.phase == .listening
+            ? "waveform.circle.fill" : "speaker.wave.2.circle.fill"
+        )
+        .font(.system(size: 56))
+        .foregroundStyle(store.phase == .listening ? .red : .blue)
+        .symbolEffect(.pulse, isActive: true)
 
         Text(store.currentQuestion)
           .font(.title2)

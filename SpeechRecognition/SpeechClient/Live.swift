@@ -60,18 +60,6 @@ private actor Speech {
       }
 
       self.audioEngine = AVAudioEngine()
-      let speechRecognizer = SFSpeechRecognizer(locale: Locale(identifier: "en-US"))!
-      self.recognitionTask = speechRecognizer.recognitionTask(with: request) { result, error in
-        switch (result, error) {
-        case (.some(let result), _):
-          continuation.yield(SpeechRecognitionResult(result))
-        case (_, .some):
-          continuation.finish(throwing: SpeechClient.Failure.taskError)
-        case (.none, .none):
-          fatalError("It should not be possible to have both a nil result and nil error.")
-        }
-      }
-
       guard let inputFormat = self.audioEngine?.inputNode.outputFormat(forBus: 0) else {
         continuation.finish(throwing: SpeechClient.Failure.couldntStartAudioEngine)
         return
@@ -81,13 +69,28 @@ private actor Speech {
       // from inside the recognition tap.
       if let recordingURL {
         do {
-          self.recordingFile = try AVAudioFile(forWriting: recordingURL, settings: inputFormat.settings)
+          self.recordingFile = try AVAudioFile(
+            forWriting: recordingURL, settings: inputFormat.settings)
         } catch {
           continuation.finish(throwing: SpeechClient.Failure.couldntWriteRecording)
           return
         }
       }
       let recordingFile = self.recordingFile
+      guard let speechRecognizer = SFSpeechRecognizer(locale: Locale(identifier: "en-US")) else {
+        continuation.finish(throwing: SpeechClient.Failure.taskError)
+        return
+      }
+      self.recognitionTask = speechRecognizer.recognitionTask(with: request) { result, error in
+        switch (result, error) {
+        case (.some(let result), _):
+          continuation.yield(SpeechRecognitionResult(result))
+        case (_, .some):
+          continuation.finish(throwing: SpeechClient.Failure.taskError)
+        case (.none, .none):
+          continuation.finish(throwing: SpeechClient.Failure.taskError)
+        }
+      }
 
       continuation.onTermination = {
         [
@@ -109,7 +112,11 @@ private actor Speech {
         format: inputFormat
       ) { buffer, when in
         request.append(buffer)
-        try? recordingFile?.write(from: buffer)
+        do {
+          try recordingFile?.write(from: buffer)
+        } catch {
+          continuation.finish(throwing: SpeechClient.Failure.couldntWriteRecording)
+        }
       }
 
       self.audioEngine?.prepare()

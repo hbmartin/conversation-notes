@@ -5,8 +5,12 @@ import SwiftUI
 struct SpeechRecognitionApp: App {
   @MainActor
   static let store = Store(initialState: AppFeature.State()) {
-    AppFeature()
-      ._printChanges()
+    #if DEBUG
+      AppFeature()
+        ._printChanges()
+    #else
+      AppFeature()
+    #endif
   }
 
   var body: some Scene {

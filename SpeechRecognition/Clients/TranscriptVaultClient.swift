@@ -34,7 +34,7 @@ extension TranscriptVaultClient: DependencyKey {
       try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
       var values = URLResourceValues()
       values.isExcludedFromBackup = true
-      try? directory.setResourceValues(values)
+      try directory.setResourceValues(values)
       return directory
     }
     @Sendable func url(for id: Session.ID) throws -> URL {
@@ -46,10 +46,18 @@ extension TranscriptVaultClient: DependencyKey {
         if fileProtection {
           options.insert(.completeFileProtection)
         }
-        try Data(transcript.utf8).write(to: url(for: id), options: options)
+        var destination = try url(for: id)
+        try Data(transcript.utf8).write(to: destination, options: options)
+        var values = URLResourceValues()
+        values.isExcludedFromBackup = true
+        try destination.setResourceValues(values)
       },
       load: { id in
-        try String(decoding: Data(contentsOf: url(for: id)), as: UTF8.self)
+        let data = try Data(contentsOf: url(for: id))
+        guard let transcript = String(data: data, encoding: .utf8) else {
+          throw CocoaError(.fileReadCorruptFile)
+        }
+        return transcript
       },
       destroy: { id in
         let url = try url(for: id)
@@ -63,7 +71,9 @@ extension TranscriptVaultClient: DependencyKey {
             at: directory, includingPropertiesForKeys: nil
           )
         else { return [] }
-        return contents.compactMap { UUID(uuidString: $0.deletingPathExtension().lastPathComponent) }
+        return contents.compactMap {
+          UUID(uuidString: $0.deletingPathExtension().lastPathComponent)
+        }
       }
     )
   }

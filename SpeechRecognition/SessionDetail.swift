@@ -7,6 +7,7 @@ struct SessionDetail {
   struct State: Equatable {
     @Shared var session: Session
     var interviewRecord: InterviewRecord?
+    @Presents var alert: AlertState<Action.Alert>?
   }
 
   enum Action {
@@ -15,6 +16,7 @@ struct SessionDetail {
     case startInterviewTapped
     case retrySummarizationTapped
     case deleteTapped
+    case alert(PresentationAction<Alert>)
     case delegate(Delegate)
 
     @CasePathable
@@ -22,6 +24,10 @@ struct SessionDetail {
       case startInterview(Session.ID)
       case retrySummarization
       case delete(Session.ID)
+    }
+
+    enum Alert: Equatable {
+      case confirmDelete
     }
   }
 
@@ -47,17 +53,32 @@ struct SessionDetail {
         return .send(.delegate(.retrySummarization))
 
       case .deleteTapped:
+        state.alert = AlertState {
+          TextState("Delete this session?")
+        } actions: {
+          ButtonState(role: .destructive, action: .confirmDelete) { TextState("Delete") }
+          ButtonState(role: .cancel) { TextState("Cancel") }
+        } message: {
+          TextState("This permanently deletes the session and cannot be undone.")
+        }
+        return .none
+
+      case .alert(.presented(.confirmDelete)):
         return .send(.delegate(.delete(state.session.id)))
+
+      case .alert:
+        return .none
 
       case .delegate:
         return .none
       }
     }
+    .ifLet(\.$alert, action: \.alert)
   }
 }
 
 struct SessionDetailView: View {
-  let store: StoreOf<SessionDetail>
+  @Bindable var store: StoreOf<SessionDetail>
 
   var body: some View {
     List {
@@ -161,6 +182,7 @@ struct SessionDetailView: View {
     }
     .navigationTitle("Session")
     .navigationBarTitleDisplayMode(.inline)
+    .alert($store.scope(state: \.alert, action: \.alert))
     .onAppear {
       store.send(.onAppear)
     }

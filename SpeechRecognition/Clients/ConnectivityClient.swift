@@ -37,6 +37,7 @@ extension ConnectivityClient: DependencyKey {
             guard shouldResume else { return }
             continuation.resume(returning: path.status == .satisfied)
             monitor.cancel()
+            monitor.pathUpdateHandler = nil
           }
           monitor.start(queue: DispatchQueue(label: "msl-capture.connectivity.one-shot"))
         }

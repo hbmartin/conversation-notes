@@ -18,9 +18,14 @@ private actor Speaker {
   func speak(_ text: String) async throws {
     self.stop()
     try await withTaskCancellationHandler {
-      try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, any Error>) in
-        let delegate = Delegate {
-          continuation.resume()
+      try await withCheckedThrowingContinuation {
+        (continuation: CheckedContinuation<Void, any Error>) in
+        let delegate = Delegate { completed in
+          if completed {
+            continuation.resume()
+          } else {
+            continuation.resume(throwing: CancellationError())
+          }
         }
         self.delegate = delegate
         self.synthesizer.delegate = delegate
@@ -40,33 +45,33 @@ private actor Speaker {
 }
 
 private final class Delegate: NSObject, AVSpeechSynthesizerDelegate, Sendable {
-  private let onDone: @Sendable () -> Void
+  private let onDone: @Sendable (Bool) -> Void
   private let hasResumed = LockIsolated(false)
 
-  init(onDone: @escaping @Sendable () -> Void) {
+  init(onDone: @escaping @Sendable (Bool) -> Void) {
     self.onDone = onDone
   }
 
-  private func resumeOnce() {
+  private func resumeOnce(completed: Bool) {
     let shouldResume = self.hasResumed.withValue { resumed -> Bool in
       guard !resumed else { return false }
       resumed = true
       return true
     }
     if shouldResume {
-      self.onDone()
+      self.onDone(completed)
     }
   }
 
   func speechSynthesizer(
     _ synthesizer: AVSpeechSynthesizer, didFinish utterance: AVSpeechUtterance
   ) {
-    self.resumeOnce()
+    self.resumeOnce(completed: true)
   }
 
   func speechSynthesizer(
     _ synthesizer: AVSpeechSynthesizer, didCancel utterance: AVSpeechUtterance
   ) {
-    self.resumeOnce()
+    self.resumeOnce(completed: false)
   }
 }

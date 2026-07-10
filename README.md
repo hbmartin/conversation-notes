@@ -11,7 +11,7 @@ can finish.
 
 ## Pipeline & artifact lifecycle
 
-```
+```text
 record → transcribe (on-device, SpeechAnalyzer) → transcript into encrypted vault
        → DESTROY AUDIO
        → summarize + extract consent (Anthropic API; queues offline) → DESTROY TRANSCRIPT
@@ -30,7 +30,7 @@ storage is device-only; there is no backend or export in v1.
 
 ## Setup
 
-1. Open `ComposableArchitecture.xcworkspace` (repo root) or this project directly, and run the
+1. Open `SpeechRecognition.xcodeproj` and run the
    `SpeechRecognition` target (iOS 26+; the on-device engine is `SpeechAnalyzer`).
 2. In the app, open **Settings** (gear icon) and paste an Anthropic API key. It is stored in
    the Keychain, device-only. Summarization and the interview call
