@@ -3,17 +3,10 @@
 	archiveVersion = 1;
 	classes = {
 	};
-	objectVersion = 54;
+	objectVersion = 77;
 	objects = {
 
 /* Begin PBXBuildFile section */
-		CA2332102447ACFA00B818EB /* SpeechRecognitionApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = CA23320F2447ACFA00B818EB /* SpeechRecognitionApp.swift */; };
-		CA2332122447ACFA00B818EB /* SpeechRecognition.swift in Sources */ = {isa = PBXBuildFile; fileRef = CA2332112447ACFA00B818EB /* SpeechRecognition.swift */; };
-		CA2332142447ACFB00B818EB /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = CA2332132447ACFB00B818EB /* Assets.xcassets */; };
-		CA2332252447ACFC00B818EB /* SpeechRecognitionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CA2332242447ACFC00B818EB /* SpeechRecognitionTests.swift */; };
-		CACC04222447C66C000C5725 /* Client.swift in Sources */ = {isa = PBXBuildFile; fileRef = CACC04212447C66C000C5725 /* Client.swift */; };
-		CACC04242447D96D000C5725 /* Live.swift in Sources */ = {isa = PBXBuildFile; fileRef = CACC04232447D96D000C5725 /* Live.swift */; };
-		CACC04272447DBAF000C5725 /* Models.swift in Sources */ = {isa = PBXBuildFile; fileRef = CACC04262447DBAF000C5725 /* Models.swift */; };
 		DC1394162469E34200EE1157 /* ComposableArchitecture in Frameworks */ = {isa = PBXBuildFile; productRef = DC1394152469E34200EE1157 /* ComposableArchitecture */; };
 /* End PBXBuildFile section */
 
@@ -52,18 +45,44 @@
 
 /* Begin PBXFileReference section */
 		CA23320A2447ACFA00B818EB /* SpeechRecognition.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = SpeechRecognition.app; sourceTree = BUILT_PRODUCTS_DIR; };
-		CA23320F2447ACFA00B818EB /* SpeechRecognitionApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpeechRecognitionApp.swift; sourceTree = "<group>"; };
-		CA2332112447ACFA00B818EB /* SpeechRecognition.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpeechRecognition.swift; sourceTree = "<group>"; };
-		CA2332132447ACFB00B818EB /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
-		CA23321B2447ACFB00B818EB /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		CA2332202447ACFC00B818EB /* SpeechRecognitionTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = SpeechRecognitionTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
-		CA2332242447ACFC00B818EB /* SpeechRecognitionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpeechRecognitionTests.swift; sourceTree = "<group>"; };
 		CA23322F2447AE0300B818EB /* swift-composable-architecture */ = {isa = PBXFileReference; lastKnownFileType = folder; name = "swift-composable-architecture"; path = ../..; sourceTree = "<group>"; };
-		CACC04212447C66C000C5725 /* Client.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Client.swift; sourceTree = "<group>"; };
-		CACC04232447D96D000C5725 /* Live.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Live.swift; sourceTree = "<group>"; };
-		CACC04262447DBAF000C5725 /* Models.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models.swift; sourceTree = "<group>"; };
 		DCB9EA3F26B21ED000497C03 /* README.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = README.md; sourceTree = "<group>"; };
 /* End PBXFileReference section */
+
+/* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
+		A1000000000000000000E001 /* Exceptions for "SpeechRecognition" folder in "SpeechRecognition" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Info.plist,
+			);
+			target = CA2332092447ACFA00B818EB /* SpeechRecognition */;
+		};
+/* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
+
+/* Begin PBXFileSystemSynchronizedRootGroup section */
+		A1000000000000000000F001 /* SpeechRecognition */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				A1000000000000000000E001 /* Exceptions for "SpeechRecognition" folder in "SpeechRecognition" target */,
+			);
+			explicitFileTypes = {
+			};
+			explicitFolders = (
+			);
+			path = SpeechRecognition;
+			sourceTree = "<group>";
+		};
+		A1000000000000000000F002 /* SpeechRecognitionTests */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			explicitFileTypes = {
+			};
+			explicitFolders = (
+			);
+			path = SpeechRecognitionTests;
+			sourceTree = "<group>";
+		};
+/* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
 		CA2332072447ACFA00B818EB /* Frameworks */ = {
@@ -90,8 +109,8 @@
 				CA23322F2447AE0300B818EB /* swift-composable-architecture */,
 				DCB9EA3F26B21ED000497C03 /* README.md */,
 				CA23320B2447ACFA00B818EB /* Products */,
-				CA23320C2447ACFA00B818EB /* SpeechRecognition */,
-				CA2332232447ACFC00B818EB /* SpeechRecognitionTests */,
+				A1000000000000000000F001 /* SpeechRecognition */,
+				A1000000000000000000F002 /* SpeechRecognitionTests */,
 			);
 			sourceTree = "<group>";
 		};
@@ -102,36 +121,6 @@
 				CA2332202447ACFC00B818EB /* SpeechRecognitionTests.xctest */,
 			);
 			name = Products;
-			sourceTree = "<group>";
-		};
-		CA23320C2447ACFA00B818EB /* SpeechRecognition */ = {
-			isa = PBXGroup;
-			children = (
-				CACC04252447DBA3000C5725 /* SpeechClient */,
-				CA2332112447ACFA00B818EB /* SpeechRecognition.swift */,
-				CA23320F2447ACFA00B818EB /* SpeechRecognitionApp.swift */,
-				CA2332132447ACFB00B818EB /* Assets.xcassets */,
-				CA23321B2447ACFB00B818EB /* Info.plist */,
-			);
-			path = SpeechRecognition;
-			sourceTree = "<group>";
-		};
-		CA2332232447ACFC00B818EB /* SpeechRecognitionTests */ = {
-			isa = PBXGroup;
-			children = (
-				CA2332242447ACFC00B818EB /* SpeechRecognitionTests.swift */,
-			);
-			path = SpeechRecognitionTests;
-			sourceTree = "<group>";
-		};
-		CACC04252447DBA3000C5725 /* SpeechClient */ = {
-			isa = PBXGroup;
-			children = (
-				CACC04212447C66C000C5725 /* Client.swift */,
-				CACC04232447D96D000C5725 /* Live.swift */,
-				CACC04262447DBAF000C5725 /* Models.swift */,
-			);
-			path = SpeechClient;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -149,6 +138,9 @@
 			buildRules = (
 			);
 			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				A1000000000000000000F001 /* SpeechRecognition */,
 			);
 			name = SpeechRecognition;
 			packageProductDependencies = (
@@ -171,6 +163,9 @@
 			);
 			dependencies = (
 				CA2332222447ACFC00B818EB /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				A1000000000000000000F002 /* SpeechRecognitionTests */,
 			);
 			name = SpeechRecognitionTests;
 			packageProductDependencies = (
@@ -200,7 +195,6 @@
 				};
 			};
 			buildConfigurationList = CA2332052447ACFA00B818EB /* Build configuration list for PBXProject "SpeechRecognition" */;
-			compatibilityVersion = "Xcode 9.3";
 			developmentRegion = en;
 			hasScannedForEncodings = 0;
 			knownRegions = (
@@ -208,6 +202,8 @@
 				Base,
 			);
 			mainGroup = CA2332012447ACFA00B818EB;
+			minimizedProjectReferenceProxies = 1;
+			preferredProjectObjectVersion = 77;
 			productRefGroup = CA23320B2447ACFA00B818EB /* Products */;
 			projectDirPath = "";
 			projectRoot = "";
@@ -223,7 +219,6 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				CA2332142447ACFB00B818EB /* Assets.xcassets in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -241,11 +236,6 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				CACC04242447D96D000C5725 /* Live.swift in Sources */,
-				CA2332102447ACFA00B818EB /* SpeechRecognitionApp.swift in Sources */,
-				CA2332122447ACFA00B818EB /* SpeechRecognition.swift in Sources */,
-				CACC04222447C66C000C5725 /* Client.swift in Sources */,
-				CACC04272447DBAF000C5725 /* Models.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -253,7 +243,6 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				CA2332252447ACFC00B818EB /* SpeechRecognitionTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -320,6 +309,7 @@
 				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
 				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
 				MTL_FAST_MATH = YES;
 				ONLY_ACTIVE_ARCH = YES;
@@ -377,6 +367,7 @@
 				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
 				MTL_ENABLE_DEBUG_INFO = NO;
 				MTL_FAST_MATH = YES;
 				SDKROOT = iphoneos;
@@ -427,7 +418,7 @@
 			buildSettings = {
 				BUNDLE_LOADER = "$(TEST_HOST)";
 				CODE_SIGN_STYLE = Automatic;
-				INFOPLIST_FILE = SpeechRecognition/Info.plist;
+				GENERATE_INFOPLIST_FILE = YES;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
@@ -445,7 +436,7 @@
 			buildSettings = {
 				BUNDLE_LOADER = "$(TEST_HOST)";
 				CODE_SIGN_STYLE = Automatic;
-				INFOPLIST_FILE = SpeechRecognition/Info.plist;
+				GENERATE_INFOPLIST_FILE = YES;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",

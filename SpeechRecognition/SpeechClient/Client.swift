@@ -1,6 +1,10 @@
 import ComposableArchitecture
+import Foundation
 import Speech
 
+/// Live-streaming speech-to-text over the microphone, used for the operator's spoken interview
+/// answers. Pass a `recordingURL` to also capture the raw mic audio to disk (interview answers
+/// are retained artifacts, unlike conversation audio).
 @DependencyClient
 struct SpeechClient {
   var finishTask: @Sendable () async -> Void
@@ -8,14 +12,18 @@ struct SpeechClient {
     .notDetermined
   }
   var startTask:
-    @Sendable (_ request: SFSpeechAudioBufferRecognitionRequest) async -> AsyncThrowingStream<
+    @Sendable (
+      _ request: SFSpeechAudioBufferRecognitionRequest,
+      _ recordingURL: URL?
+    ) async -> AsyncThrowingStream<
       SpeechRecognitionResult, Error
-    > = { _ in .finished() }
+    > = { _, _ in .finished() }
 
   enum Failure: Error, Equatable {
     case taskError
     case couldntStartAudioEngine
     case couldntConfigureAudioSession
+    case couldntWriteRecording
   }
 }
 
@@ -26,17 +34,13 @@ extension SpeechClient: TestDependencyKey {
     return Self(
       finishTask: { isRecording.setValue(false) },
       requestAuthorization: { .authorized },
-      startTask: { _ in
+      startTask: { _, _ in
         AsyncThrowingStream { continuation in
           Task {
             isRecording.setValue(true)
             var finalText = """
               Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor \
-              incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud \
-              exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat. Duis aute \
-              irure dolor in reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla \
-              pariatur. Excepteur sint occaecat cupidatat non proident, sunt in culpa qui \
-              officia deserunt mollit anim id est laborum.
+              incididunt ut labore et dolore magna aliqua.
               """
             var text = ""
             while isRecording.value {
@@ -57,6 +61,7 @@ extension SpeechClient: TestDependencyKey {
                   transcriptions: []
                 )
               )
+              if finalText.isEmpty { break }
             }
           }
         }
