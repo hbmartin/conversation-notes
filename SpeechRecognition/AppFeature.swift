@@ -1,5 +1,6 @@
 import ComposableArchitecture
 import SwiftUI
+import UIKit
 
 /// The root of the app: the session list, navigation, and — crucially — the long-lived
 /// summarization queue and launch-time crash recovery. The queue lives here (not in the capture
@@ -20,31 +21,38 @@ struct AppFeature {
     @Presents var activeSession: ActiveSession.State?
     @Presents var alert: AlertState<Action.Alert>?
     var isConnected = false
-    var summarizeAttempt = 0
-    var blockedSummarizationIDs: Set<Session.ID> = []
+    var isRequestingMicrophonePermission = false
+    /// Only concurrency is transient; retry eligibility and timing live on each persisted session.
+    var summarizationInFlightID: Session.ID?
   }
 
   enum Action {
     case onLaunch
     case newSessionButtonTapped
+    case recordPermissionResponse(Bool)
     case settingsButtonTapped
     case sessionTapped(Session.ID)
     case connectivityChanged(Bool)
     case drainQueue
-    case summarizationResponse(Session.ID, Result<SummarizationResult, any Error>)
+    case retryTimerFired(Session.ID, Date)
+    case summarizationResponse(Session.ID, Result<SummaryResponse, any Error>)
     case transcriptDestroyed(Session.ID)
     case path(StackActionOf<Path>)
     case activeSession(PresentationAction<ActiveSession.Action>)
     case alert(PresentationAction<Alert>)
 
-    enum Alert: Equatable {}
+    enum Alert: Equatable {
+      case openSystemSettings
+    }
   }
 
+  @Dependency(\.audioRecorder) var audioRecorder
   @Dependency(\.audioStorage) var audioStorage
   @Dependency(\.transcriptVault) var transcriptVault
   @Dependency(\.connectivity) var connectivity
-  @Dependency(\.anthropicClient) var anthropic
+  @Dependency(\.conversationService) var conversationService
   @Dependency(\.continuousClock) var clock
+  @Dependency(\.openURL) var openURL
   @Dependency(\.uuid) var uuid
   @Dependency(\.date.now) var now
 
@@ -52,6 +60,10 @@ struct AppFeature {
     case connectivity
     case drain
     case retry
+  }
+
+  private enum SummarizationPipelineError: Error {
+    case transcriptUnavailable
   }
 
   var body: some Reducer<State, Action> {
@@ -78,7 +90,9 @@ struct AppFeature {
         let validIDs = Set(state.sessions.ids)
         let summarizedIDs = Set(
           state.sessions
-            .filter { [.summaryReady, .interviewing, .saved, .lost].contains($0.state) }
+            .filter {
+              [.summaryReady, .interviewing, .saved, .permissionDenied, .lost].contains($0.state)
+            }
             .map(\.id)
         )
         return .merge(
@@ -104,10 +118,42 @@ struct AppFeature {
         )
 
       case .newSessionButtonTapped:
+        guard !state.isRequestingMicrophonePermission, state.activeSession == nil else {
+          return .none
+        }
+        state.isRequestingMicrophonePermission = true
+        return .run { send in
+          let allowed = await self.audioRecorder.requestRecordPermission()
+          await send(.recordPermissionResponse(allowed))
+        }
+
+      case .recordPermissionResponse(true):
+        guard state.isRequestingMicrophonePermission else { return .none }
+        state.isRequestingMicrophonePermission = false
         let session = Session(id: self.uuid(), startDate: self.now, state: .recording)
         state.$sessions.withLock { _ = $0.append(session) }
         guard let sharedSession = Shared(state.$sessions[id: session.id]) else { return .none }
         state.activeSession = ActiveSession.State(session: sharedSession)
+        return .none
+
+      case .recordPermissionResponse(false):
+        guard state.isRequestingMicrophonePermission else { return .none }
+        state.isRequestingMicrophonePermission = false
+        let session = Session(
+          id: self.uuid(),
+          startDate: self.now,
+          state: .permissionDenied,
+          lossReason: "Microphone access was denied before recording began."
+        )
+        state.$sessions.withLock { _ = $0.append(session) }
+        state.alert = AlertState {
+          TextState("Microphone access denied")
+        } actions: {
+          ButtonState(action: .openSystemSettings) { TextState("Open Settings") }
+          ButtonState(role: .cancel) { TextState("Not Now") }
+        } message: {
+          TextState("Enable microphone access in System Settings before starting a new session.")
+        }
         return .none
 
       case .settingsButtonTapped:
@@ -123,38 +169,33 @@ struct AppFeature {
         let wasConnected = state.isConnected
         state.isConnected = connected
         if connected, !wasConnected {
-          state.summarizeAttempt = 0
           return .merge(.cancel(id: CancelID.retry), .send(.drainQueue))
         }
-        return .none
+        return connected ? .none : .cancel(id: CancelID.retry)
 
       case .drainQueue:
+        return self.drainQueue(state: &state)
+
+      case .retryTimerFired(let id, let scheduledAt):
         guard
-          state.isConnected,
-          let session = state.sessions.first(where: {
-            $0.state == .awaitingSummarization && !state.blockedSummarizationIDs.contains($0.id)
-          })
+          state.sessions[id: id]?.state == .awaitingSummarization,
+          state.sessions[id: id]?.summarizationFailure?.requiredAction == .automaticRetry,
+          state.sessions[id: id]?.summarizationFailure?.nextRetryAt == scheduledAt
         else { return .none }
-        return .run { [id = session.id] send in
-          await send(
-            .summarizationResponse(
-              id,
-              Result {
-                let transcript = try await self.transcriptVault.load(id)
-                return try await self.anthropic.summarize(transcript)
-              }
-            )
-          )
+        state.$sessions.withLock { sessions in
+          sessions[id: id]?.summarizationFailure?.requiredAction = .retryNow
         }
-        .cancellable(id: CancelID.drain, cancelInFlight: true)
+        return .send(.drainQueue)
 
       case .summarizationResponse(let id, .success(let result)):
-        state.summarizeAttempt = 0
-        state.blockedSummarizationIDs.remove(id)
+        guard state.summarizationInFlightID == id else { return .none }
+        state.summarizationInFlightID = nil
         state.$sessions.withLock { sessions in
           sessions[id: id]?.summary = result.summary
           sessions[id: id]?.consentUtterance = result.consentUtterance
           sessions[id: id]?.state = .summaryReady
+          sessions[id: id]?.summarizationFailure = nil
+          sessions[id: id]?.summaryServiceAudit = result.audit
         }
         // Destroy the transcript only after the summary is durably in shared state.
         return .run { send in
@@ -163,20 +204,17 @@ struct AppFeature {
         }
 
       case .summarizationResponse(let id, .failure(let error)):
-        if let error = error as? AnthropicClientError, !error.isRetryable {
-          state.blockedSummarizationIDs.insert(id)
-          state.summarizeAttempt = 0
-          return .send(.drainQueue)
+        guard state.summarizationInFlightID == id else { return .none }
+        state.summarizationInFlightID = nil
+        let previousAttempts = state.sessions[id: id]?.summarizationFailure?.attemptCount ?? 0
+        let failure = self.summarizationFailure(
+          for: error,
+          attemptCount: previousAttempts + 1
+        )
+        state.$sessions.withLock { sessions in
+          sessions[id: id]?.summarizationFailure = failure
         }
-        // The transcript is intact in the vault; retry with capped exponential backoff.
-        state.summarizeAttempt += 1
-        let exponent = min(state.summarizeAttempt - 1, 6)
-        let delay = min(Duration.seconds(30 * (1 << exponent)), Duration.seconds(1800))
-        return .run { send in
-          try await self.clock.sleep(for: delay)
-          await send(.drainQueue)
-        }
-        .cancellable(id: CancelID.retry, cancelInFlight: true)
+        return .send(.drainQueue)
 
       case .transcriptDestroyed:
         // Continue with the next queued session, if any.
@@ -186,14 +224,20 @@ struct AppFeature {
         switch delegateAction {
         case .transcriptReady:
           return .send(.drainQueue)
-        case .retrySummarization:
-          state.summarizeAttempt = 0
-          state.blockedSummarizationIDs.removeAll()
-          return .send(.drainQueue)
+        case .retrySummarization(let id):
+          return self.retrySummarization(state: &state, id: id)
+        case .openSettings:
+          state.activeSession = nil
+          state.path.append(.settings(Settings.State()))
+          return .none
         case .discarded(let id):
           state.activeSession = nil
           state.$sessions.withLock { _ = $0.remove(id: id) }
-          return .none
+          if state.summarizationInFlightID == id {
+            state.summarizationInFlightID = nil
+            return .merge(.cancel(id: CancelID.drain), .send(.drainQueue))
+          }
+          return .send(.drainQueue)
         case .readyForInterview(let id):
           state.activeSession = nil
           return self.startInterview(state: &state, sessionID: id)
@@ -209,17 +253,27 @@ struct AppFeature {
         switch delegateAction {
         case .startInterview(let id):
           return self.startInterview(state: &state, sessionID: id)
-        case .retrySummarization:
-          state.summarizeAttempt = 0
-          state.blockedSummarizationIDs.removeAll()
-          return .send(.drainQueue)
+        case .retrySummarization(let id):
+          return self.retrySummarization(state: &state, id: id)
+        case .openSettings:
+          state.path.append(.settings(Settings.State()))
+          return .none
         case .delete(let id):
           state.path.removeAll()
           state.$sessions.withLock { _ = $0.remove(id: id) }
-          return .run { _ in
+          let cleanup = Effect<Action>.run { _ in
             try? await self.audioStorage.destroyRecording(id)
             try? await self.transcriptVault.destroy(id)
           }
+          if state.summarizationInFlightID == id {
+            state.summarizationInFlightID = nil
+            return .merge(
+              .cancel(id: CancelID.drain),
+              cleanup,
+              .send(.drainQueue)
+            )
+          }
+          return .merge(cleanup, .send(.drainQueue))
         }
 
       case .path(
@@ -231,8 +285,30 @@ struct AppFeature {
         state.path.pop(from: pathID)
         return .none
 
+      case .path(.element(_, action: .interview(.delegate(.openSettings)))):
+        state.path.append(.settings(Settings.State()))
+        return .none
+
+      case .path(.popFrom(let pathID)):
+        guard let index = state.path.ids.firstIndex(of: pathID) else { return .none }
+        let abandonedSessionIDs = state.path[index...].compactMap { pathState -> Session.ID? in
+          guard case .interview(let interview) = pathState else { return nil }
+          return interview.sessionID
+        }
+        state.$sessions.withLock { sessions in
+          for id in abandonedSessionIDs where sessions[id: id]?.state == .interviewing {
+            sessions[id: id]?.state = .summaryReady
+          }
+        }
+        return .none
+
       case .path:
         return .none
+
+      case .alert(.presented(.openSystemSettings)):
+        return .run { _ in
+          await self.openURL(URL(string: UIApplication.openSettingsURLString)!)
+        }
 
       case .alert:
         return .none
@@ -245,9 +321,159 @@ struct AppFeature {
     .forEach(\.path, action: \.path)
   }
 
+  private func drainQueue(state: inout State) -> Effect<Action> {
+    guard state.isConnected, state.summarizationInFlightID == nil else { return .none }
+
+    let now = self.now
+    if let session = state.sessions.first(where: { session in
+      guard session.state == .awaitingSummarization else { return false }
+      guard let failure = session.summarizationFailure else { return true }
+      switch failure.requiredAction {
+      case .retryNow:
+        return true
+      case .automaticRetry:
+        return failure.nextRetryAt.map { $0 <= now } ?? true
+      case .openSettings, .contactSupport:
+        return false
+      }
+    }) {
+      let id = session.id
+      state.summarizationInFlightID = id
+      return .merge(
+        .cancel(id: CancelID.retry),
+        .run { send in
+          let result: Result<SummaryResponse, any Error>
+          do {
+            let transcript: String
+            do {
+              transcript = try await self.transcriptVault.load(id)
+            } catch {
+              throw SummarizationPipelineError.transcriptUnavailable
+            }
+            result = await Result {
+              try await self.conversationService.summarize(
+                SummaryRequest(sessionID: id, transcript: transcript)
+              )
+            }
+          } catch {
+            result = .failure(error)
+          }
+          await send(.summarizationResponse(id, result))
+        }
+        .cancellable(id: CancelID.drain, cancelInFlight: true)
+      )
+    }
+
+    guard
+      let scheduled = (
+        state.sessions
+        .filter { session in
+          session.state == .awaitingSummarization
+            && session.summarizationFailure?.requiredAction == .automaticRetry
+            && session.summarizationFailure?.nextRetryAt != nil
+        }
+        .compactMap({ session -> (Session.ID, Date)? in
+          guard let date = session.summarizationFailure?.nextRetryAt else { return nil }
+          return (session.id, date)
+        })
+        .min(by: { $0.1 < $1.1 })
+      )
+    else { return .cancel(id: CancelID.retry) }
+
+    let delay = max(0, scheduled.1.timeIntervalSince(now))
+    return .run { send in
+      try await self.clock.sleep(for: .seconds(delay))
+      await send(.retryTimerFired(scheduled.0, scheduled.1))
+    }
+    .cancellable(id: CancelID.retry, cancelInFlight: true)
+  }
+
+  private func summarizationFailure(
+    for error: any Error,
+    attemptCount: Int
+  ) -> SummarizationFailure {
+    let kind: SummarizationFailure.Kind
+    let requiredAction: SummarizationFailure.RequiredAction
+
+    if error is SummarizationPipelineError {
+      kind = .transcriptUnavailable
+      requiredAction = .contactSupport
+    } else if let error = error as? ConversationServiceError {
+      switch error {
+      case .credentialsMissing:
+        kind = .credentialsMissing
+        requiredAction = .openSettings
+      case .credentialsRejected:
+        kind = .credentialsRejected
+        requiredAction = .openSettings
+      case .network:
+        kind = .network
+        requiredAction = .automaticRetry
+      case .rateLimited:
+        kind = .rateLimited
+        requiredAction = .automaticRetry
+      case .serviceUnavailable:
+        kind = .serviceUnavailable
+        requiredAction = .automaticRetry
+      case .requestRejected:
+        kind = .requestRejected
+        requiredAction = .contactSupport
+      case .invalidResponse:
+        kind = .invalidResponse
+        requiredAction = .contactSupport
+      case .contentRefused:
+        kind = .contentRefused
+        requiredAction = .contactSupport
+      case .responseTruncated:
+        kind = .responseTruncated
+        requiredAction = .contactSupport
+      case .unknown:
+        kind = .unknown
+        requiredAction = .contactSupport
+      }
+    } else {
+      kind = .unknown
+      requiredAction = .contactSupport
+    }
+
+    let nextRetryAt: Date?
+    if requiredAction == .automaticRetry {
+      let exponent = min(max(attemptCount - 1, 0), 6)
+      let delay = min(TimeInterval(30 * (1 << exponent)), 1_800)
+      nextRetryAt = self.now.addingTimeInterval(delay)
+    } else {
+      nextRetryAt = nil
+    }
+    return SummarizationFailure(
+      kind: kind,
+      attemptCount: attemptCount,
+      nextRetryAt: nextRetryAt,
+      requiredAction: requiredAction
+    )
+  }
+
+  private func retrySummarization(state: inout State, id: Session.ID) -> Effect<Action> {
+    guard state.sessions[id: id]?.state == .awaitingSummarization else { return .none }
+    state.$sessions.withLock { sessions in
+      if sessions[id: id]?.summarizationFailure == nil {
+        sessions[id: id]?.summarizationFailure = SummarizationFailure(
+          kind: .unknown,
+          attemptCount: 0,
+          nextRetryAt: self.now,
+          requiredAction: .retryNow
+        )
+      } else {
+        sessions[id: id]?.summarizationFailure?.nextRetryAt = self.now
+        sessions[id: id]?.summarizationFailure?.requiredAction = .retryNow
+      }
+    }
+    return .merge(.cancel(id: CancelID.retry), .send(.drainQueue))
+  }
+
   private func startInterview(state: inout State, sessionID: Session.ID) -> Effect<Action> {
     guard
       let session = state.sessions[id: sessionID],
+      session.state == .summaryReady,
       let summary = session.summary
     else { return .none }
     guard state.isConnected else {
@@ -259,6 +485,9 @@ struct AppFeature {
         )
       }
       return .none
+    }
+    state.$sessions.withLock { sessions in
+      sessions[id: sessionID]?.state = .interviewing
     }
     state.path.append(
       .interview(

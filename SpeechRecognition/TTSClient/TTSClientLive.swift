@@ -20,7 +20,9 @@ private actor Speaker {
     try await withTaskCancellationHandler {
       try await withCheckedThrowingContinuation {
         (continuation: CheckedContinuation<Void, any Error>) in
-        let delegate = Delegate { completed in
+        let utterance = AVSpeechUtterance(string: text)
+        utterance.voice = AVSpeechSynthesisVoice(language: "en-US")
+        let delegate = Delegate(utterance: utterance) { completed in
           if completed {
             continuation.resume()
           } else {
@@ -29,8 +31,6 @@ private actor Speaker {
         }
         self.delegate = delegate
         self.synthesizer.delegate = delegate
-        let utterance = AVSpeechUtterance(string: text)
-        utterance.voice = AVSpeechSynthesisVoice(language: "en-US")
         self.synthesizer.speak(utterance)
       }
     } onCancel: {
@@ -39,17 +39,28 @@ private actor Speaker {
   }
 
   func stop() {
-    // Triggers the delegate's `didCancel`, which resumes any in-flight continuation.
     self.synthesizer.stopSpeaking(at: .immediate)
+    // Delegate callbacks arrive asynchronously on the main queue, so `didCancel` for the
+    // stopped utterance can land after a new delegate is installed. Resume the in-flight
+    // continuation here instead of trusting callback timing; the late callback then hits a
+    // delegate that has already resumed (or one guarding a different utterance) and is a no-op.
+    self.delegate?.finishCancelled()
+    self.delegate = nil
   }
 }
 
 private final class Delegate: NSObject, AVSpeechSynthesizerDelegate, Sendable {
+  private let utteranceID: ObjectIdentifier
   private let onDone: @Sendable (Bool) -> Void
   private let hasResumed = LockIsolated(false)
 
-  init(onDone: @escaping @Sendable (Bool) -> Void) {
+  init(utterance: AVSpeechUtterance, onDone: @escaping @Sendable (Bool) -> Void) {
+    self.utteranceID = ObjectIdentifier(utterance)
     self.onDone = onDone
+  }
+
+  func finishCancelled() {
+    self.resumeOnce(completed: false)
   }
 
   private func resumeOnce(completed: Bool) {
@@ -66,12 +77,14 @@ private final class Delegate: NSObject, AVSpeechSynthesizerDelegate, Sendable {
   func speechSynthesizer(
     _ synthesizer: AVSpeechSynthesizer, didFinish utterance: AVSpeechUtterance
   ) {
+    guard ObjectIdentifier(utterance) == self.utteranceID else { return }
     self.resumeOnce(completed: true)
   }
 
   func speechSynthesizer(
     _ synthesizer: AVSpeechSynthesizer, didCancel utterance: AVSpeechUtterance
   ) {
+    guard ObjectIdentifier(utterance) == self.utteranceID else { return }
     self.resumeOnce(completed: false)
   }
 }

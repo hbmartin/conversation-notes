@@ -34,7 +34,7 @@ extension TranscriptionClient: DependencyKey {
         // Without the model assets installed, the analyzer cannot determine its supported
         // sampling rates and fails with a misleading "Audio format is not supported" error —
         // so assets are (re)ensured here rather than trusting the warm-up `prepare` call.
-        let locale = try await ensureModelAssets(for: Locale(identifier: "en-US"))
+        let locale = try await ensureModelAssets(for: TranscriptionClient.locale)
         let transcriber = SpeechTranscriber(
           locale: locale,
           transcriptionOptions: [],

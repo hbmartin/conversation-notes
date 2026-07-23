@@ -1,5 +1,6 @@
 import ComposableArchitecture
 import SwiftUI
+import UIKit
 
 @Reducer
 struct SessionDetail {
@@ -15,6 +16,7 @@ struct SessionDetail {
     case interviewRecordLoaded(InterviewRecord?)
     case startInterviewTapped
     case retrySummarizationTapped
+    case openSettingsTapped
     case deleteTapped
     case alert(PresentationAction<Alert>)
     case delegate(Delegate)
@@ -22,7 +24,8 @@ struct SessionDetail {
     @CasePathable
     enum Delegate {
       case startInterview(Session.ID)
-      case retrySummarization
+      case retrySummarization(Session.ID)
+      case openSettings
       case delete(Session.ID)
     }
 
@@ -50,7 +53,10 @@ struct SessionDetail {
         return .send(.delegate(.startInterview(state.session.id)))
 
       case .retrySummarizationTapped:
-        return .send(.delegate(.retrySummarization))
+        return .send(.delegate(.retrySummarization(state.session.id)))
+
+      case .openSettingsTapped:
+        return .send(.delegate(.openSettings))
 
       case .deleteTapped:
         state.alert = AlertState {
@@ -98,13 +104,24 @@ struct SessionDetailView: View {
       switch store.session.state {
       case .awaitingSummarization:
         Section {
-          Label(
-            "Waiting to summarize. The encrypted transcript is queued and will be processed automatically when online.",
-            systemImage: "clock"
+          SummarizationStatusView(
+            failure: store.session.summarizationFailure,
+            retry: { store.send(.retrySummarizationTapped) },
+            openSettings: { store.send(.openSettingsTapped) }
           )
-          Button("Retry Now") {
-            store.send(.retrySummarizationTapped)
-          }
+        }
+
+      case .permissionDenied:
+        Section {
+          Label(
+            store.session.lossReason ?? "Microphone access was denied before recording began.",
+            systemImage: "mic.slash"
+          )
+          .foregroundStyle(.orange)
+          Link(
+            "Open System Settings",
+            destination: URL(string: UIApplication.openSettingsURLString)!
+          )
         }
 
       case .lost:
@@ -186,5 +203,49 @@ struct SessionDetailView: View {
     .onAppear {
       store.send(.onAppear)
     }
+  }
+}
+
+struct SummarizationStatusView: View {
+  let failure: SummarizationFailure?
+  let retry: () -> Void
+  let openSettings: () -> Void
+
+  var body: some View {
+    if let failure {
+      Label(failure.userMessage, systemImage: "exclamationmark.triangle")
+        .foregroundStyle(failure.requiredAction == .contactSupport ? .red : .orange)
+
+      Text("Failed attempt \(failure.attemptCount)")
+        .font(.footnote)
+        .foregroundStyle(.secondary)
+
+      switch failure.requiredAction {
+      case .automaticRetry:
+        if let nextRetryAt = failure.nextRetryAt {
+          LabeledContent(
+            "Next retry",
+            value: nextRetryAt.formatted(date: .abbreviated, time: .shortened)
+          )
+        }
+      case .openSettings:
+        Button("Open Settings", action: self.openSettings)
+          .buttonStyle(.borderedProminent)
+      case .retryNow:
+        Label("Retry requested", systemImage: "arrow.clockwise")
+          .foregroundStyle(.secondary)
+      case .contactSupport:
+        Label("Contact your administrator or support team.", systemImage: "person.crop.circle.badge.questionmark")
+          .foregroundStyle(.secondary)
+      }
+    } else {
+      Label(
+        "Waiting to summarize. The encrypted transcript remains queued until processing succeeds.",
+        systemImage: "clock"
+      )
+    }
+
+    Button("Retry This Session", action: self.retry)
+      .disabled(failure?.requiredAction == .retryNow)
   }
 }

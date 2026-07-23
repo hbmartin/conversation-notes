@@ -1,3 +1,4 @@
+import ComposableArchitecture
 import Foundation
 import Testing
 
@@ -98,7 +99,7 @@ struct AnthropicClientTests {
   @Test
   func summarizationResultDecodesNullConsent() throws {
     let result = try JSONDecoder().decode(
-      SummarizationResult.self,
+      AnthropicSummaryPayload.self,
       from: Data(#"{"summary": "A summary.", "consent_utterance": null}"#.utf8)
     )
     #expect(result.summary == "A summary.")
@@ -235,5 +236,95 @@ struct AnthropicClientTests {
     #expect(AnthropicClientError.network.isRetryable)
     #expect(!AnthropicClientError.unauthorized.isRetryable)
     #expect(!AnthropicClientError.refused.isRetryable)
+  }
+
+  @Test
+  func retryDelayHonorsAndCapsRetryAfter() {
+    // A present Retry-After header is honored…
+    #expect(
+      AnthropicClient.retryDelay(
+        after: .rateLimited(retryAfterSeconds: 30), attempt: 1, jitter: 1
+      ) == 30
+    )
+    // …but clamped so a hostile or buggy header can't park the queue for hours.
+    #expect(
+      AnthropicClient.retryDelay(
+        after: .rateLimited(retryAfterSeconds: 86_400), attempt: 1, jitter: 1
+      ) == 60
+    )
+    // Without the header, rate limiting falls back to jittered exponential backoff.
+    #expect(
+      AnthropicClient.retryDelay(
+        after: .rateLimited(retryAfterSeconds: nil), attempt: 2, jitter: 0.5
+      ) == 2
+    )
+    #expect(AnthropicClient.retryDelay(after: .network, attempt: 1, jitter: 1) == 2)
+    #expect(AnthropicClient.retryDelay(after: .network, attempt: 2, jitter: 1) == 4)
+  }
+
+  // MARK: - Provider-neutral adapter
+
+  @Test
+  func conversationAdapterReconstructsProviderHistoryAndMapsAudit() async throws {
+    let captured = LockIsolated<InterviewTurnRequest?>(nil)
+    let audit = ServiceAuditMetadata(
+      requestID: "msg_42",
+      modelVersion: "claude-test",
+      promptVersion: "interview-v1"
+    )
+    let provider = AnthropicClient(
+      summarize: { _ in SummaryResponse(summary: "unused", consentUtterance: nil) },
+      interviewTurn: { request in
+        captured.setValue(request)
+        return AssistantTurn(
+          content: [.text("Next question?")],
+          stopReason: .endTurn,
+          text: "Next question?",
+          toolUse: nil,
+          audit: audit
+        )
+      }
+    )
+    let client = withDependencies {
+      $0.anthropicClient = provider
+    } operation: {
+      @Dependency(\.conversationService) var client
+      return client
+    }
+
+    let step = try await client.nextInterviewStep(
+      InterviewContext(
+        interviewID: UUID(0),
+        sessionID: UUID(1),
+        summary: "Scrubbed summary",
+        exchanges: [InterviewExchange(question: "First?", answer: "Answer")]
+      )
+    )
+
+    #expect(step == .question("Next question?", audit: audit))
+    let request = try #require(captured.value)
+    #expect(request.system.contains("Scrubbed summary"))
+    #expect(
+      request.messages
+        == [
+          InterviewAgent.openingUserMessage,
+          AnthropicMessage(role: .assistant, content: [.text("First?")]),
+          AnthropicMessage(role: .user, content: [.text("Answer")]),
+        ]
+    )
+    #expect(request.tools == [InterviewAgent.recordInterviewTool])
+  }
+
+  @Test
+  func anthropicErrorsMapToDomainErrors() {
+    #expect(AnthropicClientError.missingAPIKey.conversationServiceError == .credentialsMissing)
+    #expect(AnthropicClientError.unauthorized.conversationServiceError == .credentialsRejected)
+    #expect(
+      AnthropicClientError.rateLimited(retryAfterSeconds: 12).conversationServiceError
+        == .rateLimited(retryAfterSeconds: 12)
+    )
+    #expect(AnthropicClientError.serverError(status: 529).conversationServiceError == .serviceUnavailable)
+    #expect(AnthropicClientError.decoding("bad").conversationServiceError == .invalidResponse)
+    #expect(AnthropicClientError.refused.conversationServiceError == .contentRefused)
   }
 }

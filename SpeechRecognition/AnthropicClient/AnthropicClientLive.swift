@@ -22,13 +22,11 @@ extension AnthropicClient: DependencyKey {
       var lastError = AnthropicClientError.network
       for attempt in 0..<3 {
         if attempt > 0 {
-          let retryDelay: Double
-          if case .rateLimited(let seconds) = lastError, let seconds {
-            retryDelay = Double(seconds)
-          } else {
-            retryDelay = Double(1 << attempt) * Double.random(in: 0.5...1)
-          }
-          try await Task.sleep(for: .seconds(retryDelay))
+          try await Task.sleep(
+            for: .seconds(
+              Self.retryDelay(after: lastError, attempt: attempt, jitter: .random(in: 0.5...1))
+            )
+          )
         }
         do {
           let data: Data
@@ -69,7 +67,16 @@ extension AnthropicClient: DependencyKey {
           throw AnthropicClientError.decoding("Response contained no text block")
         }
         do {
-          return try JSONDecoder().decode(SummarizationResult.self, from: Data(json.utf8))
+          let result = try JSONDecoder().decode(AnthropicSummaryPayload.self, from: Data(json.utf8))
+          return SummaryResponse(
+            summary: result.summary,
+            consentUtterance: result.consentUtterance,
+            audit: ServiceAuditMetadata(
+              requestID: response.id,
+              modelVersion: response.model,
+              promptVersion: Self.summaryPromptVersion
+            )
+          )
         } catch {
           throw AnthropicClientError.decoding("\(error)")
         }
@@ -89,9 +96,22 @@ extension AnthropicClient: DependencyKey {
         case .maxTokens: throw AnthropicClientError.truncated
         default: break
         }
-        return AssistantTurn(response: response)
+        return AssistantTurn(response: response, promptVersion: Self.interviewPromptVersion)
       }
     )
+  }
+
+  /// Delay in seconds before retry `attempt` (1-based) after `error`. Pure so the backoff
+  /// policy is unit-testable; `jitter` scales the exponential branch (callers pass a random
+  /// value in 0.5...1).
+  static func retryDelay(after error: AnthropicClientError, attempt: Int, jitter: Double) -> Double
+  {
+    if case .rateLimited(let seconds) = error, let seconds {
+      // The header is server-controlled; trusting it verbatim could park this call for hours.
+      // Longer waits belong to the summarization queue's own capped backoff.
+      return min(Double(seconds), 60)
+    }
+    return Double(1 << attempt) * jitter
   }
 
   /// Pure function of (data, response) so error mapping is unit-testable without networking.
@@ -159,4 +179,69 @@ extension AnthropicClient: DependencyKey {
       preconditionFailure("Invalid summary schema: \(error)")
     }
   }()
+
+  static let summaryPromptVersion = "direct-anthropic-summary-v1"
+  static let interviewPromptVersion = "direct-anthropic-interview-v1"
+}
+
+/// Temporary BYOK adapter. Production deployments replace this dependency with an authenticated
+/// gateway implementation while feature reducers remain provider-neutral.
+extension ConversationServiceClient: DependencyKey {
+  static var liveValue: Self {
+    @Dependency(\.anthropicClient) var anthropic
+
+    return Self(
+      summarize: { request in
+        do {
+          return try await anthropic.summarize(request.transcript)
+        } catch is CancellationError {
+          throw CancellationError()
+        } catch let error as AnthropicClientError {
+          throw error.conversationServiceError
+        } catch {
+          throw ConversationServiceError.unknown
+        }
+      },
+      nextInterviewStep: { context in
+        var messages = [InterviewAgent.openingUserMessage]
+        for exchange in context.exchanges {
+          messages.append(AnthropicMessage(role: .assistant, content: [.text(exchange.question)]))
+          messages.append(AnthropicMessage(role: .user, content: [.text(exchange.answer)]))
+        }
+
+        do {
+          let turn = try await anthropic.interviewTurn(
+            InterviewTurnRequest(
+              system: InterviewAgent.systemPrompt(summary: context.summary),
+              messages: messages,
+              tools: [InterviewAgent.recordInterviewTool]
+            )
+          )
+          if let toolUse = turn.toolUse, toolUse.name == InterviewAgent.toolName {
+            do {
+              let extraction = try JSONDecoder().decode(
+                InterviewExtraction.self,
+                from: toolUse.input.encodedData()
+              )
+              return .completed(extraction, audit: turn.audit)
+            } catch {
+              throw ConversationServiceError.invalidResponse
+            }
+          }
+          guard turn.stopReason == .endTurn, !turn.text.isEmpty else {
+            throw ConversationServiceError.invalidResponse
+          }
+          return .question(turn.text, audit: turn.audit)
+        } catch is CancellationError {
+          throw CancellationError()
+        } catch let error as ConversationServiceError {
+          throw error
+        } catch let error as AnthropicClientError {
+          throw error.conversationServiceError
+        } catch {
+          throw ConversationServiceError.unknown
+        }
+      }
+    )
+  }
 }

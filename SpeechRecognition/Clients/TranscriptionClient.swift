@@ -30,6 +30,12 @@ struct TranscriptionClient: Sendable {
   var transcribe: @Sendable (_ audioURL: URL) async throws -> Transcript
 }
 
+extension TranscriptionClient {
+  /// The single locale v1 transcribes in. `prepare` callers and `transcribe` implementations
+  /// must agree on this so the warm-up installs the same model the batch pass uses.
+  static let locale = Locale(identifier: "en-US")
+}
+
 extension TranscriptionClient: TestDependencyKey {
   static let previewValue = Self(
     requestAuthorization: { true },

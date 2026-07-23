@@ -1,11 +1,13 @@
 import ComposableArchitecture
 import Speech
 import SwiftUI
+import UIKit
 
 /// The post-conversation voice interview: a Claude agent asks one question at a time (spoken by
 /// TTS), the operator answers by voice (streamed by STT, committed on a silence timeout or the
 /// Done button), and the loop ends when the agent calls `record_interview` with the full field
-/// schema. The entire API message history lives in state so a retry re-sends it verbatim.
+/// schema. Only domain Q&A history lives in state; the service implementation owns provider
+/// messages, prompts, tools, and model selection.
 @Reducer
 struct Interview {
   @ObservableState
@@ -17,7 +19,7 @@ struct Interview {
     var currentQuestion = ""
     var partialAnswer = ""
     var turns: [InterviewTurn] = []
-    var messages: [AnthropicMessage] = []
+    var serviceAuditTrail: [ServiceAuditMetadata] = []
     var extraction: InterviewExtraction?
     var pendingRecord: InterviewRecord?
     var failure: FailureState?
@@ -25,9 +27,11 @@ struct Interview {
 
     enum Phase: Equatable {
       case idle
+      case authorizing
       case processing
       case speaking
       case listening
+      case committing
       case finishing
       case finished
       case failed
@@ -38,13 +42,19 @@ struct Interview {
       var isRetryable: Bool
       /// STT failures retry by re-entering listening; agent failures re-send the turn.
       var resumesListening = false
+      var settingsDestination: SettingsDestination? = nil
+
+      enum SettingsDestination: Equatable {
+        case app
+        case system
+      }
     }
   }
 
   enum Action {
     case task
-    case speechAuthorizationDenied
-    case agentResponse(Result<AssistantTurn, any Error>)
+    case speechAuthorizationResponse(SFSpeechRecognizerAuthorizationStatus)
+    case serviceResponse(Result<InterviewStep, any Error>)
     case questionSpoken
     case sttPartial(String)
     case sttFailed
@@ -54,15 +64,17 @@ struct Interview {
     case closingSpoken
     case saveFailed(InterviewRecord)
     case retryButtonTapped
+    case appSettingsButtonTapped
     case delegate(Delegate)
 
     @CasePathable
     enum Delegate {
       case interviewFinished(InterviewRecord)
+      case openSettings
     }
   }
 
-  @Dependency(\.anthropicClient) var anthropic
+  @Dependency(\.conversationService) var conversationService
   @Dependency(\.ttsClient) var tts
   @Dependency(\.speechClient) var speechClient
   @Dependency(\.interviewArtifacts) var artifacts
@@ -76,6 +88,7 @@ struct Interview {
     case stt
     case silence
     case tts
+    case service
   }
 
   var body: some Reducer<State, Action> {
@@ -84,43 +97,38 @@ struct Interview {
       case .task:
         guard state.phase == .idle else { return .none }
         state.startedAt = self.now
-        state.phase = .processing
-        state.messages = [InterviewAgent.openingUserMessage]
-        return .merge(
-          .run { send in
-            guard await self.speechClient.requestAuthorization() == .authorized else {
-              await send(.speechAuthorizationDenied)
-              return
-            }
-          },
-          self.requestTurn(state)
-        )
+        state.phase = .authorizing
+        return .run { send in
+          let status = await self.speechClient.requestAuthorization()
+          await send(.speechAuthorizationResponse(status))
+        }
 
-      case .speechAuthorizationDenied:
+      case .speechAuthorizationResponse(.authorized):
+        guard state.phase == .authorizing else { return .none }
+        state.phase = .processing
+        return self.requestStep(state)
+
+      case .speechAuthorizationResponse:
+        guard state.phase == .authorizing else { return .none }
         state.phase = .failed
         state.failure = State.FailureState(
           message: "Speech recognition permission is required for the voice interview.",
-          isRetryable: false
+          isRetryable: false,
+          settingsDestination: .system
         )
-        return .none
+        return .merge(
+          .cancel(id: CancelID.service),
+          .cancel(id: CancelID.tts),
+          .cancel(id: CancelID.stt),
+          .cancel(id: CancelID.silence)
+        )
 
-      case .agentResponse(.success(let turn)):
-        state.messages.append(AnthropicMessage(role: .assistant, content: turn.content))
-        if let toolUse = turn.toolUse, toolUse.name == InterviewAgent.toolName {
-          do {
-            state.extraction = try JSONDecoder().decode(
-              InterviewExtraction.self,
-              from: toolUse.input.encodedData()
-            )
-          } catch {
-            // Defensive: `strict: true` makes schema-invalid tool input a dead path.
-            state.phase = .failed
-            state.failure = State.FailureState(
-              message: "The interview agent returned malformed data.",
-              isRetryable: true
-            )
-            return .none
-          }
+      case .serviceResponse(.success(let step)):
+        guard state.phase == .processing else { return .none }
+        switch step {
+        case .completed(let extraction, let audit):
+          if let audit { state.serviceAuditTrail.append(audit) }
+          state.extraction = extraction
           state.phase = .finishing
           state.currentQuestion = InterviewAgent.closingRemark
           return .run { send in
@@ -132,33 +140,43 @@ struct Interview {
             await send(.closingSpoken)
           }
           .cancellable(id: CancelID.tts, cancelInFlight: true)
-        }
-        guard turn.stopReason == .endTurn, !turn.text.isEmpty else {
-          state.phase = .failed
-          state.failure = State.FailureState(
-            message: "The interview agent returned an unexpected response.",
-            isRetryable: true
-          )
-          return .none
-        }
-        state.currentQuestion = turn.text
-        state.phase = .speaking
-        return .run { [question = turn.text] send in
-          do {
-            try await self.tts.speak(question)
-          } catch is CancellationError {
-            return
-          } catch {}
-          await send(.questionSpoken)
-        }
-        .cancellable(id: CancelID.tts, cancelInFlight: true)
 
-      case .agentResponse(.failure(let error)):
+        case .question(let question, let audit):
+          if let audit { state.serviceAuditTrail.append(audit) }
+          guard !question.isEmpty else {
+            state.phase = .failed
+            state.failure = State.FailureState(
+              message: ConversationServiceError.invalidResponse.userMessage,
+              isRetryable: false
+            )
+            return .none
+          }
+          state.currentQuestion = question
+          state.phase = .speaking
+          return .run { send in
+            do {
+              try await self.tts.speak(question)
+            } catch is CancellationError {
+              return
+            } catch {}
+            await send(.questionSpoken)
+          }
+          .cancellable(id: CancelID.tts, cancelInFlight: true)
+        }
+
+      case .serviceResponse(.failure(let error)):
+        guard state.phase == .processing else { return .none }
+        let serviceError = error as? ConversationServiceError ?? .unknown
         state.phase = .failed
         state.failure = State.FailureState(
-          message: (error as? AnthropicClientError)?.userMessage
-            ?? "Something went wrong talking to the interview agent.",
-          isRetryable: (error as? AnthropicClientError)?.isRetryable ?? true
+          message: serviceError.userMessage,
+          isRetryable: serviceError.isRetryable || serviceError == .unknown,
+          settingsDestination: {
+            switch serviceError {
+            case .credentialsMissing, .credentialsRejected: return .app
+            default: return nil
+            }
+          }()
         )
         return .merge(.cancel(id: CancelID.stt), .cancel(id: CancelID.silence))
 
@@ -191,8 +209,10 @@ struct Interview {
 
       case .silenceTimerFired, .doneButtonTapped:
         guard state.phase == .listening, !state.partialAnswer.isEmpty else { return .none }
+        state.phase = .committing
         return .merge(
           .cancel(id: CancelID.silence),
+          .cancel(id: CancelID.stt),
           .run { [answer = state.partialAnswer] send in
             await self.speechClient.finishTask()
             await send(.answerCommitted(answer))
@@ -200,6 +220,7 @@ struct Interview {
         )
 
       case .answerCommitted(let answer):
+        guard state.phase == .committing else { return .none }
         state.turns.append(
           InterviewTurn(
             index: state.turns.count,
@@ -209,12 +230,12 @@ struct Interview {
             askedAt: self.now
           )
         )
-        state.messages.append(AnthropicMessage(role: .user, content: [.text(answer)]))
         state.partialAnswer = ""
         state.phase = .processing
-        return self.requestTurn(state)
+        return self.requestStep(state)
 
       case .closingSpoken:
+        guard state.phase == .finishing else { return .none }
         let record = InterviewRecord(
           id: state.interviewID,
           sessionID: state.sessionID,
@@ -223,7 +244,8 @@ struct Interview {
           summaryUsed: state.summary,
           turns: state.turns,
           extraction: state.extraction,
-          model: AnthropicModel.opus
+          model: state.serviceAuditTrail.last?.modelVersion ?? "service-managed",
+          serviceAuditTrail: state.serviceAuditTrail
         )
         state.phase = .finished
         return .run { send in
@@ -234,6 +256,10 @@ struct Interview {
         }
 
       case .saveFailed(let record):
+        guard
+          state.phase == .finished
+            || (state.phase == .failed && state.pendingRecord?.id == record.id)
+        else { return .none }
         state.phase = .failed
         state.pendingRecord = record
         state.failure = State.FailureState(
@@ -270,7 +296,11 @@ struct Interview {
           }
         }
         state.phase = .processing
-        return self.requestTurn(state)
+        return self.requestStep(state)
+
+      case .appSettingsButtonTapped:
+        guard state.failure?.settingsDestination == .app else { return .none }
+        return .send(.delegate(.openSettings))
 
       case .delegate:
         return .none
@@ -278,22 +308,33 @@ struct Interview {
     }
   }
 
-  private func requestTurn(_ state: State) -> Effect<Action> {
-    .run { [summary = state.summary, messages = state.messages] send in
+  private func requestStep(_ state: State) -> Effect<Action> {
+    let exchanges = state.turns.map {
+      InterviewExchange(question: $0.question, answer: $0.answerTranscript)
+    }
+    return .run {
+      [
+        interviewID = state.interviewID,
+        sessionID = state.sessionID,
+        summary = state.summary,
+        exchanges,
+      ] send in
       await send(
-        .agentResponse(
+        .serviceResponse(
           Result {
-            try await self.anthropic.interviewTurn(
-              InterviewTurnRequest(
-                system: InterviewAgent.systemPrompt(summary: summary),
-                messages: messages,
-                tools: [InterviewAgent.recordInterviewTool]
+            try await self.conversationService.nextInterviewStep(
+              InterviewContext(
+                interviewID: interviewID,
+                sessionID: sessionID,
+                summary: summary,
+                exchanges: exchanges
               )
             )
           }
         )
       )
     }
+    .cancellable(id: CancelID.service, cancelInFlight: true)
   }
 }
 
@@ -305,9 +346,9 @@ struct InterviewView: View {
       Spacer()
 
       switch store.phase {
-      case .idle, .processing:
+      case .idle, .authorizing, .processing, .committing:
         ProgressView()
-        Text("Thinking…")
+        Text(store.phase == .authorizing ? "Requesting speech access…" : "Thinking…")
           .foregroundStyle(.secondary)
 
       case .speaking, .listening, .finishing:
@@ -355,6 +396,21 @@ struct InterviewView: View {
             store.send(.retryButtonTapped)
           }
           .buttonStyle(.borderedProminent)
+        }
+        switch store.failure?.settingsDestination {
+        case .app:
+          Button("Open Settings") {
+            store.send(.appSettingsButtonTapped)
+          }
+          .buttonStyle(.bordered)
+        case .system:
+          Link(
+            "Open System Settings",
+            destination: URL(string: UIApplication.openSettingsURLString)!
+          )
+          .buttonStyle(.bordered)
+        case nil:
+          EmptyView()
         }
       }
 

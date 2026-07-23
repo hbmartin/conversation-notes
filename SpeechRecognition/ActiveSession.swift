@@ -42,7 +42,6 @@ struct ActiveSession {
     case resumeTapped
     case stopTapped
     case discardTapped
-    case permissionDenied
     case recorderDidFinish(Result<Bool, any Error>)
     case powerStatusResponse(PowerStatus)
     case sceneBecameActive
@@ -51,6 +50,7 @@ struct ActiveSession {
     case transcriptSecured
     case securingFailed(String)
     case retrySummarizationTapped
+    case openSettingsTapped
     case startInterviewTapped
     case doneTapped
     case alert(PresentationAction<Alert>)
@@ -59,7 +59,8 @@ struct ActiveSession {
     @CasePathable
     enum Delegate {
       case transcriptReady(Session.ID)
-      case retrySummarization
+      case retrySummarization(Session.ID)
+      case openSettings
       case discarded(Session.ID)
       case readyForInterview(Session.ID)
       case closed
@@ -85,13 +86,9 @@ struct ActiveSession {
         return .merge(
           // Warm up the on-device transcription model while recording so it's ready by Stop.
           .run { _ in
-            try? await self.transcriptionClient.prepare(Locale(identifier: "en-US"))
+            try? await self.transcriptionClient.prepare(TranscriptionClient.locale)
           },
           .run { [id = state.session.id] send in
-            guard await self.audioRecorder.requestRecordPermission() else {
-              await send(.permissionDenied)
-              return
-            }
             await withTaskGroup(of: Void.self) { group in
               group.addTask {
                 do {
@@ -144,16 +141,6 @@ struct ActiveSession {
           await self.audioRecorder.stopRecording()
         }
 
-      case .permissionDenied:
-        state.alert = AlertState {
-          TextState("Microphone access denied")
-        } actions: {
-          ButtonState(action: .acknowledgeLost) { TextState("OK") }
-        } message: {
-          TextState("Enable microphone access in Settings to record a session.")
-        }
-        return .none
-
       case .recorderDidFinish(.success(true)):
         guard !state.isDiscarding else { return .none }
         guard state.phase == .stopping else { return .none }
@@ -166,6 +153,14 @@ struct ActiveSession {
         return self.markLost(&state)
 
       case .powerStatusResponse(let status):
+        switch state.phase {
+        case .stopping, .waitingForPower:
+          break
+        case .failed where state.session.state == .stopped:
+          break
+        default:
+          return .none
+        }
         guard status.allowsTranscription else {
           state.phase = .waitingForPower(status)
           return .none
@@ -176,7 +171,11 @@ struct ActiveSession {
 
       case .sceneBecameActive, .retryTranscriptionTapped:
         switch state.phase {
-        case .waitingForPower, .failed:
+        case .waitingForPower:
+          return .run { send in
+            await send(.powerStatusResponse(self.powerState.powerStatus()))
+          }
+        case .failed where state.session.state == .stopped:
           return .run { send in
             await send(.powerStatusResponse(self.powerState.powerStatus()))
           }
@@ -185,6 +184,7 @@ struct ActiveSession {
         }
 
       case .transcriptionResponse(.success(let transcript)):
+        guard state.phase == .transcribing else { return .none }
         state.phase = .securingTranscript
         return .run { [id = state.session.id] send in
           do {
@@ -199,17 +199,20 @@ struct ActiveSession {
         }
 
       case .transcriptionResponse(.failure(let error)):
+        guard state.phase == .transcribing else { return .none }
         // Audio is intentionally NOT destroyed: transcription can be retried.
         state.phase = .failed("Transcription failed: \(error.localizedDescription)")
         state.$session.withLock { $0.state = .stopped }
         return .none
 
       case .transcriptSecured:
+        guard state.phase == .securingTranscript else { return .none }
         state.phase = .pipeline
         state.$session.withLock { $0.state = .awaitingSummarization }
         return .send(.delegate(.transcriptReady(state.session.id)))
 
       case .securingFailed(let message):
+        guard state.phase == .securingTranscript else { return .none }
         // The audio still exists (it is only destroyed after a successful vault write), so a
         // retry re-runs the power gate and transcription.
         state.phase = .failed("Could not secure the transcript: \(message)")
@@ -217,7 +220,11 @@ struct ActiveSession {
         return .none
 
       case .retrySummarizationTapped:
-        return .send(.delegate(.retrySummarization))
+        guard state.session.state == .awaitingSummarization else { return .none }
+        return .send(.delegate(.retrySummarization(state.session.id)))
+
+      case .openSettingsTapped:
+        return .send(.delegate(.openSettings))
 
       case .discardTapped:
         state.alert = AlertState {
@@ -410,19 +417,16 @@ struct ActiveSessionView: View {
   private var pipelineContent: some View {
     switch store.session.state {
     case .awaitingSummarization:
-      ProgressView()
-      Text("Summarizing…")
-        .font(.title3)
-      Text(
-        "The encrypted transcript is queued and will be summarized when a connection is available. It is deleted as soon as the summary is saved."
-      )
-      .font(.footnote)
-      .foregroundStyle(.secondary)
-      .multilineTextAlignment(.center)
-      Button("Retry Now") {
-        store.send(.retrySummarizationTapped)
+      if store.session.summarizationFailure == nil {
+        ProgressView()
       }
-      .buttonStyle(.bordered)
+      Text(store.session.summarizationFailure == nil ? "Summarizing…" : "Summary needs attention")
+        .font(.title3)
+      SummarizationStatusView(
+        failure: store.session.summarizationFailure,
+        retry: { store.send(.retrySummarizationTapped) },
+        openSettings: { store.send(.openSettingsTapped) }
+      )
 
     case .summaryReady:
       ScrollView {

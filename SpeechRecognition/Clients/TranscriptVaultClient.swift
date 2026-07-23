@@ -50,7 +50,13 @@ extension TranscriptVaultClient: DependencyKey {
         try Data(transcript.utf8).write(to: destination, options: options)
         var values = URLResourceValues()
         values.isExcludedFromBackup = true
-        try destination.setResourceValues(values)
+        do {
+          try destination.setResourceValues(values)
+        } catch {
+          // Fail closed: never leave a transcript on disk without backup exclusion.
+          try? FileManager.default.removeItem(at: destination)
+          throw error
+        }
       },
       load: { id in
         let data = try Data(contentsOf: url(for: id))
