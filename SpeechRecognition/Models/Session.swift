@@ -36,8 +36,8 @@ struct SummarizationFailure: Codable, Equatable, Sendable {
     case serviceUnavailable
     case requestRejected
     case invalidResponse
-    case contentRefused
-    case responseTruncated
+    case refusal
+    case truncation
     case transcriptUnavailable
     case unknown
   }
@@ -65,9 +65,9 @@ struct SummarizationFailure: Codable, Equatable, Sendable {
       return "The summarization request was rejected. Contact support."
     case .invalidResponse:
       return "The summarization service returned an unexpected response. Contact support."
-    case .contentRefused:
+    case .refusal:
       return "The service declined to summarize this content. Contact support."
-    case .responseTruncated:
+    case .truncation:
       return "The summarization response was incomplete. Contact support."
     case .transcriptUnavailable:
       return "The encrypted transcript could not be loaded. Contact support."

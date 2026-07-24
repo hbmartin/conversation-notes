@@ -87,7 +87,10 @@ private struct SessionRow: View {
       case .automaticRetry:
         badge("Retry scheduled", color: .orange)
       case .retryNow:
-        badge("Retrying", color: .orange)
+        badge(
+          session.summarizationFailure?.nextRetryAt == nil ? "Retry required" : "Retrying",
+          color: .orange
+        )
       case nil:
         badge("Queued", color: .orange)
       }

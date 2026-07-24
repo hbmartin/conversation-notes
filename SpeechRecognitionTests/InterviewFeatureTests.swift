@@ -258,6 +258,7 @@ struct InterviewFeatureTests {
       $0.phase = .listening
     }
     harness.sttContinuations.withValue { $0.last?.finish() }
+    await store.finish()
   }
 
   @Test
@@ -290,6 +291,7 @@ struct InterviewFeatureTests {
       $0.phase = .listening
     }
     harness.sttContinuations.withValue { $0.last?.finish() }
+    await store.finish()
   }
 
   @Test

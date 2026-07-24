@@ -184,6 +184,7 @@ struct AppFeature {
         else { return .none }
         state.$sessions.withLock { sessions in
           sessions[id: id]?.summarizationFailure?.requiredAction = .retryNow
+          sessions[id: id]?.summarizationFailure?.nextRetryAt = self.now
         }
         return .send(.drainQueue)
 
@@ -330,7 +331,7 @@ struct AppFeature {
       guard let failure = session.summarizationFailure else { return true }
       switch failure.requiredAction {
       case .retryNow:
-        return true
+        return failure.nextRetryAt.map { $0 <= now } ?? false
       case .automaticRetry:
         return failure.nextRetryAt.map { $0 <= now } ?? true
       case .openSettings, .contactSupport:
@@ -422,18 +423,18 @@ struct AppFeature {
         kind = .invalidResponse
         requiredAction = .contactSupport
       case .contentRefused:
-        kind = .contentRefused
+        kind = .refusal
         requiredAction = .contactSupport
       case .responseTruncated:
-        kind = .responseTruncated
+        kind = .truncation
         requiredAction = .contactSupport
       case .unknown:
         kind = .unknown
-        requiredAction = .contactSupport
+        requiredAction = .retryNow
       }
     } else {
       kind = .unknown
-      requiredAction = .contactSupport
+      requiredAction = .retryNow
     }
 
     let nextRetryAt: Date?

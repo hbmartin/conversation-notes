@@ -36,6 +36,7 @@ struct AppFeatureTests {
     let store = TestStore(initialState: AppFeature.State()) {
       AppFeature()
     } withDependencies: {
+      $0.date.now = Date(timeIntervalSince1970: 0)
       $0.transcriptVault.load = { id in
         events.withValue { $0.append("vault.load(\(id))") }
         return "the transcript"
@@ -122,6 +123,7 @@ struct AppFeatureTests {
     let store = TestStore(initialState: AppFeature.State()) {
       AppFeature()
     } withDependencies: {
+      $0.date.now = Date(timeIntervalSince1970: 0)
       $0.transcriptVault.load = { id in "transcript \(id)" }
       $0.transcriptVault.destroy = { _ in }
       $0.conversationService.summarize = { request in
@@ -160,6 +162,7 @@ struct AppFeatureTests {
     let store = TestStore(initialState: AppFeature.State()) {
       AppFeature()
     } withDependencies: {
+      $0.date.now = Date(timeIntervalSince1970: 0)
       $0.transcriptVault.load = { _ in "the transcript" }
       $0.transcriptVault.destroy = { _ in }
       $0.conversationService.summarize = { _ in
@@ -196,6 +199,7 @@ struct AppFeatureTests {
     let store = TestStore(initialState: state) {
       AppFeature()
     } withDependencies: {
+      $0.date.now = Date(timeIntervalSince1970: 0)
       $0.transcriptVault.load = { _ in "the transcript" }
       $0.transcriptVault.destroy = { _ in }
       $0.conversationService.summarize = { _ in
@@ -225,6 +229,7 @@ struct AppFeatureTests {
     let transcribingID = UUID(1)
     let queuedID = UUID(2)
     let deniedID = UUID(3)
+    let interviewingID = UUID(4)
     let orphanVaultID = UUID(9)
     @Shared(.sessions) var sessions = [
       Session(id: recordingID, startDate: Date(timeIntervalSince1970: 0), state: .recording),
@@ -233,6 +238,12 @@ struct AppFeatureTests {
         id: queuedID, startDate: Date(timeIntervalSince1970: 120), state: .awaitingSummarization),
       Session(
         id: deniedID, startDate: Date(timeIntervalSince1970: 180), state: .permissionDenied),
+      Session(
+        id: interviewingID,
+        startDate: Date(timeIntervalSince1970: 240),
+        state: .interviewing,
+        summary: "Recovered summary"
+      ),
     ]
     let events = LockIsolated<[String]>([])
     let store = TestStore(initialState: AppFeature.State()) {
@@ -257,6 +268,7 @@ struct AppFeatureTests {
         $0[id: recordingID]?.lossReason = lossReason
         $0[id: transcribingID]?.state = .lost
         $0[id: transcribingID]?.lossReason = lossReason
+        $0[id: interviewingID]?.state = .summaryReady
       }
     }
     await store.receive(\.drainQueue)
@@ -270,6 +282,7 @@ struct AppFeatureTests {
     #expect(!events.value.contains("vault.destroy(\(queuedID))"))
     #expect(store.state.sessions[id: queuedID]?.state == .awaitingSummarization)
     #expect(store.state.sessions[id: deniedID]?.state == .permissionDenied)
+    #expect(store.state.sessions[id: interviewingID]?.state == .summaryReady)
 
     await task.cancel()
   }
@@ -425,6 +438,42 @@ struct AppFeatureTests {
   }
 
   @Test
+  func deniedInterviewAuthorizationRestoresSummaryReadyWhenRouteCloses() async {
+    let sessionID = UUID(0)
+    @Shared(.sessions) var sessions = [
+      Session(
+        id: sessionID,
+        startDate: Date(timeIntervalSince1970: 0),
+        state: .summaryReady,
+        summary: "A summary."
+      )
+    ]
+    var state = AppFeature.State()
+    state.isConnected = true
+    let store = TestStore(initialState: state) {
+      AppFeature()
+    } withDependencies: {
+      $0.uuid = .incrementing
+      $0.date.now = Date(timeIntervalSince1970: 0)
+      $0.speechClient.requestAuthorization = { .denied }
+    }
+    store.exhaustivity = .off
+
+    await store.send(.sessionTapped(sessionID))
+    await store.send(
+      .path(.element(id: 0, action: .detail(.delegate(.startInterview(sessionID)))))
+    )
+    #expect(store.state.sessions[id: sessionID]?.state == .interviewing)
+
+    await store.send(.path(.element(id: 1, action: .interview(.task)))).finish()
+    #expect(store.state.sessions[id: sessionID]?.state == .interviewing)
+
+    await store.send(.path(.popFrom(id: 1)))
+    #expect(store.state.sessions[id: sessionID]?.state == .summaryReady)
+    #expect(store.state.path.count == 1)
+  }
+
+  @Test
   func retryNowTargetsOnlyRequestedSession() async {
     let firstID = UUID(0)
     let secondID = UUID(1)
@@ -475,5 +524,136 @@ struct AppFeatureTests {
     #expect(store.state.sessions[id: firstID]?.summarizationFailure == nil)
     #expect(store.state.sessions[id: secondID]?.state == .awaitingSummarization)
     #expect(store.state.sessions[id: secondID]?.summarizationFailure == blocked)
+  }
+
+  @Test
+  func persistedDueRetryRunsAfterRelaunchDrain() async {
+    let id = UUID(0)
+    @Shared(.sessions) var sessions = [
+      Session(
+        id: id,
+        startDate: Date(timeIntervalSince1970: 0),
+        state: .awaitingSummarization,
+        summarizationFailure: SummarizationFailure(
+          kind: .network,
+          attemptCount: 2,
+          nextRetryAt: Date(timeIntervalSince1970: 10),
+          requiredAction: .automaticRetry
+        )
+      )
+    ]
+    var state = AppFeature.State()
+    state.isConnected = true
+    let store = TestStore(initialState: state) {
+      AppFeature()
+    } withDependencies: {
+      $0.date.now = Date(timeIntervalSince1970: 20)
+      $0.transcriptVault.load = { _ in "transcript" }
+      $0.transcriptVault.destroy = { _ in }
+      $0.conversationService.summarize = { _ in
+        SummaryResponse(summary: "Recovered after launch", consentUtterance: nil)
+      }
+    }
+    store.exhaustivity = .off
+
+    await store.send(.drainQueue)
+    await store.receive(\.transcriptDestroyed)
+    #expect(store.state.sessions[id: id]?.state == .summaryReady)
+    #expect(store.state.sessions[id: id]?.summarizationFailure == nil)
+  }
+
+  @Test
+  func credentialActionPushesSettingsWithoutClearingFailure() async {
+    let id = UUID(0)
+    let failure = SummarizationFailure(
+      kind: .credentialsRejected,
+      attemptCount: 1,
+      nextRetryAt: nil,
+      requiredAction: .openSettings
+    )
+    @Shared(.sessions) var sessions = [
+      Session(
+        id: id,
+        startDate: Date(timeIntervalSince1970: 0),
+        state: .awaitingSummarization,
+        summarizationFailure: failure
+      )
+    ]
+    var state = AppFeature.State()
+    state.path.append(.detail(SessionDetail.State(session: Shared($sessions[id: id])!)))
+    let store = TestStore(initialState: state) {
+      AppFeature()
+    }
+    store.exhaustivity = .off
+
+    await store.send(.path(.element(id: 0, action: .detail(.delegate(.openSettings)))))
+    #expect(store.state.path.count == 2)
+    #expect(store.state.sessions[id: id]?.summarizationFailure == failure)
+  }
+
+  @Test
+  func unknownWaitsForManualRetryWhileDeterministicFailureRequiresSupport() async {
+    let manualID = UUID(0)
+    let supportID = UUID(1)
+    @Shared(.sessions) var sessions = [
+      Session(
+        id: manualID,
+        startDate: Date(timeIntervalSince1970: 0),
+        state: .awaitingSummarization
+      ),
+      Session(
+        id: supportID,
+        startDate: Date(timeIntervalSince1970: 1),
+        state: .awaitingSummarization
+      ),
+    ]
+    let results = LockIsolated<[Result<SummaryResponse, ConversationServiceError>]>([
+      .failure(.unknown),
+      .failure(.invalidResponse),
+      .success(SummaryResponse(summary: "Manually recovered", consentUtterance: nil)),
+    ])
+    var state = AppFeature.State()
+    state.isConnected = true
+    let store = TestStore(initialState: state) {
+      AppFeature()
+    } withDependencies: {
+      $0.date.now = Date(timeIntervalSince1970: 20)
+      $0.transcriptVault.load = { _ in "transcript" }
+      $0.transcriptVault.destroy = { _ in }
+      $0.conversationService.summarize = { _ in
+        try results.withValue { $0.removeFirst() }.get()
+      }
+    }
+    store.exhaustivity = .off
+
+    await store.send(.drainQueue)
+    await store.receive(\.summarizationResponse)
+    await store.receive(\.summarizationResponse)
+
+    let manualFailure = store.state.sessions[id: manualID]?.summarizationFailure
+    #expect(manualFailure?.kind == .unknown)
+    #expect(manualFailure?.requiredAction == .retryNow)
+    #expect(manualFailure?.nextRetryAt == nil)
+    #expect(manualFailure?.attemptCount == 1)
+    #expect(
+      store.state.sessions[id: supportID]?.summarizationFailure?.requiredAction
+        == .contactSupport
+    )
+    #expect(store.state.sessions[id: supportID]?.summarizationFailure?.kind == .invalidResponse)
+    #expect(results.value.count == 1)
+
+    await store.send(.sessionTapped(manualID))
+    await store.send(
+      .path(.element(id: 0, action: .detail(.delegate(.retrySummarization(manualID)))))
+    )
+    await store.receive(\.transcriptDestroyed)
+
+    #expect(store.state.sessions[id: manualID]?.state == .summaryReady)
+    #expect(store.state.sessions[id: manualID]?.summarizationFailure == nil)
+    #expect(store.state.sessions[id: supportID]?.state == .awaitingSummarization)
+    #expect(
+      store.state.sessions[id: supportID]?.summarizationFailure?.requiredAction
+        == .contactSupport
+    )
   }
 }

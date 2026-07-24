@@ -232,7 +232,10 @@ struct SummarizationStatusView: View {
         Button("Open Settings", action: self.openSettings)
           .buttonStyle(.borderedProminent)
       case .retryNow:
-        Label("Retry requested", systemImage: "arrow.clockwise")
+        Label(
+          failure.nextRetryAt == nil ? "Manual retry required" : "Retry requested",
+          systemImage: "arrow.clockwise"
+        )
           .foregroundStyle(.secondary)
       case .contactSupport:
         Label("Contact your administrator or support team.", systemImage: "person.crop.circle.badge.questionmark")
@@ -246,6 +249,8 @@ struct SummarizationStatusView: View {
     }
 
     Button("Retry This Session", action: self.retry)
-      .disabled(failure?.requiredAction == .retryNow)
+      .disabled(
+        failure?.requiredAction == .retryNow && failure?.nextRetryAt != nil
+      )
   }
 }

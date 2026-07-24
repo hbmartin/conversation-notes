@@ -150,6 +150,12 @@ struct ActiveSession {
 
       case .recorderDidFinish(.success(false)), .recorderDidFinish(.failure):
         guard !state.isDiscarding else { return .none }
+        switch state.phase {
+        case .recording, .stopping:
+          break
+        default:
+          return .none
+        }
         return self.markLost(&state)
 
       case .powerStatusResponse(let status):

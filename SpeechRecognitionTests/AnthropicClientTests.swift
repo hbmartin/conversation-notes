@@ -288,8 +288,7 @@ struct AnthropicClientTests {
     let client = withDependencies {
       $0.anthropicClient = provider
     } operation: {
-      @Dependency(\.conversationService) var client
-      return client
+      ConversationServiceClient.liveValue
     }
 
     let step = try await client.nextInterviewStep(
