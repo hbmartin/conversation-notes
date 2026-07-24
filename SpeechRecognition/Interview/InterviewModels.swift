@@ -51,7 +51,7 @@ struct InterviewRecord: Codable, Equatable, Identifiable, Sendable {
   var sessionID: UUID
   var startedAt: Date
   var endedAt: Date?
-  var summaryUsed: String
+  var summaryUsed: String?
   var turns: [InterviewTurn]
   var extraction: InterviewExtraction?
   var model: String
@@ -131,31 +131,45 @@ enum InterviewAgent {
     }()
   )
 
-  static func systemPrompt(summary: String) -> String {
-    """
-    You are a structured debrief interviewer for a Medical Science Liaison (MSL) who has just \
-    finished a conversation with a healthcare professional (HCP). Interview the MSL by voice, \
-    one question at a time.
+  static func systemPrompt(summary: String?) -> String {
+    let context: String
+    if let summary, !summary.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+      context = """
+        Use the conversation summary below to pre-fill your understanding and skip questions whose \
+        answers are already unambiguous from the summary.
 
-    Rules:
-    - Your plain-text output is spoken aloud verbatim. Ask exactly ONE short, conversational \
-    question per turn — no lists, no markdown, no preamble.
-    - You must gather every field of the `record_interview` tool before finishing. Use the \
-    conversation summary below to pre-fill your understanding and skip questions whose answers \
-    are already unambiguous from the summary — but you MUST still explicitly ask these two \
-    questions in some form, even if the summary seems to answer them: (1) "Were any adverse \
-    events or product complaints mentioned?" (2) "Was there any off-label discussion?"
-    - You may ask follow-ups to clarify vague answers. Keep the whole interview under about \
-    ten questions.
-    - When — and only when — all fields are gathered and both mandatory questions have been \
-    explicitly asked and answered, call `record_interview` exactly once. Do not call it \
-    earlier; do not produce a question and the tool call in the same turn.
+        Conversation summary (context, already scrubbed of patient identifiers):
+        ```
+        \(summary)
+        ```
+        """
+    } else {
+      context = """
+        This is a standalone interview with no conversation summary. Gather every required field \
+        directly from the operator; do not assume or pre-fill any answer.
+        """
+    }
 
-    Conversation summary (context, already scrubbed of patient identifiers):
-    ```
-    \(summary)
-    ```
-    """
+    return """
+      You are a structured debrief interviewer for a Medical Science Liaison (MSL) who has just \
+      finished a conversation with a healthcare professional (HCP). Interview the MSL by voice, \
+      one question at a time.
+
+      Rules:
+      - Your plain-text output is spoken aloud verbatim. Ask exactly ONE short, conversational \
+      question per turn — no lists, no markdown, no preamble.
+      - You must gather every field of the `record_interview` tool before finishing. You MUST \
+      explicitly ask these two \
+      questions in some form, even if other context seems to answer them: (1) "Were any adverse \
+      events or product complaints mentioned?" (2) "Was there any off-label discussion?"
+      - You may ask follow-ups to clarify vague answers. Keep the whole interview under about \
+      ten questions.
+      - When — and only when — all fields are gathered and both mandatory questions have been \
+      explicitly asked and answered, call `record_interview` exactly once. Do not call it \
+      earlier; do not produce a question and the tool call in the same turn.
+
+      \(context)
+      """
   }
 
   static let openingUserMessage = AnthropicMessage(

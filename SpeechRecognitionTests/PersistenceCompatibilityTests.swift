@@ -46,6 +46,7 @@ struct PersistenceCompatibilityTests {
       from: JSONEncoder().encode(legacy)
     )
     #expect(session.id == legacy.id)
+    #expect(session.kind == .conversation)
     #expect(session.state == .awaitingSummarization)
     #expect(session.summarizationFailure == nil)
     #expect(session.summaryServiceAudit == nil)
@@ -103,5 +104,41 @@ struct PersistenceCompatibilityTests {
     #expect(decoded == session)
     #expect(decoded.summarizationFailure?.nextRetryAt == retryDate)
     #expect(decoded.summaryServiceAudit == audit)
+  }
+
+  @Test
+  func standaloneInterviewSessionAndRecordRoundTripWithoutSummary() throws {
+    let interviewID = UUID(8)
+    let session = Session(
+      id: UUID(7),
+      kind: .interview,
+      startDate: Date(timeIntervalSince1970: 50),
+      state: .saved,
+      interviewID: interviewID
+    )
+    let record = InterviewRecord(
+      id: interviewID,
+      sessionID: session.id,
+      startedAt: session.startDate,
+      endedAt: Date(timeIntervalSince1970: 80),
+      summaryUsed: nil,
+      turns: [],
+      extraction: nil,
+      model: "service-model"
+    )
+
+    let decodedSession = try JSONDecoder().decode(
+      Session.self,
+      from: JSONEncoder().encode(session)
+    )
+    let decodedRecord = try JSONDecoder().decode(
+      InterviewRecord.self,
+      from: JSONEncoder().encode(record)
+    )
+
+    #expect(decodedSession == session)
+    #expect(decodedSession.kind == .interview)
+    #expect(decodedRecord == record)
+    #expect(decodedRecord.summaryUsed == nil)
   }
 }

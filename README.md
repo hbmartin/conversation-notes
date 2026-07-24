@@ -4,19 +4,22 @@ This application (formerly the SpeechRecognition example) is a v1 implementation
 MSL interaction-capture app built with the Composable Architecture: a Medical Science Liaison
 (MSL) records an in-person scientific exchange with a healthcare professional (HCP), the app
 transcribes it **on-device**, produces a compliance-safe **prose summary**, and **destroys the
-source audio and transcript**. Immediately after, the app runs a **structured voice interview**
-with the MSL (TTS asks, STT captures) driven by a Claude agent that must fill a fixed
-required-field schema — including mandatory adverse-event and off-label questions — before it
-can finish.
+source audio and transcript**. The MSL can then run a context-aware **structured voice interview**
+(TTS asks, STT captures), or start the same guided interview independently from the home screen
+without first recording a conversation. The Claude agent must fill a fixed required-field schema
+— including mandatory adverse-event and off-label questions — before it can finish.
 
 ## Pipeline & artifact lifecycle
 
 ```text
-record → transcribe (on-device, SpeechAnalyzer) → transcript into encrypted vault
-       → DESTROY AUDIO
-       → summarize + extract consent (conversation-service boundary; queues offline)
-       → DESTROY TRANSCRIPT
-       → SummaryReady → voice interview (retained: audio + transcript + extraction)
+conversation → transcribe (on-device, SpeechAnalyzer) → transcript into encrypted vault
+             → DESTROY AUDIO
+             → summarize + extract consent (conversation-service boundary; queues offline)
+             → DESTROY TRANSCRIPT
+             → SummaryReady → optional linked voice interview
+
+standalone interview → guided TTS/STT questions with no conversation summary required
+                     → retained answer audio + transcript + structured extraction
 ```
 
 | Artifact | Fate |

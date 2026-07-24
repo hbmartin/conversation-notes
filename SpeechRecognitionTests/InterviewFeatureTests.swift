@@ -61,7 +61,10 @@ struct InterviewFeatureTests {
     let savedRecord = LockIsolated<InterviewRecord?>(nil)
     let store: TestStore<Interview.State, Interview.Action>
 
-    init(serviceScript: [Result<InterviewStep, ConversationServiceError>]) {
+    init(
+      summary: String? = "A summary.",
+      serviceScript: [Result<InterviewStep, ConversationServiceError>]
+    ) {
       let serviceResults = LockIsolated(serviceScript)
       self.serviceResults = serviceResults
       let contexts = self.contexts
@@ -72,7 +75,7 @@ struct InterviewFeatureTests {
         initialState: Interview.State(
           interviewID: UUID(42),
           sessionID: UUID(0),
-          summary: "A summary."
+          summary: summary
         )
       ) {
         Interview()
@@ -188,6 +191,54 @@ struct InterviewFeatureTests {
     #expect(harness.savedRecord.value?.model == "model-1")
     #expect(harness.savedRecord.value?.serviceAuditTrail == [firstAudit, finalAudit])
     #expect(harness.savedRecord.value?.extraction == expectedExtraction)
+  }
+
+  @Test
+  func standaloneInterviewUsesNoSummaryAndPersistsThatOrigin() async {
+    let harness = Harness(summary: nil, serviceScript: [.success(completedStep())])
+    let store = harness.store
+
+    await harness.startAuthorized()
+    await store.receive(\.serviceResponse.success) {
+      $0.extraction = expectedExtraction
+      $0.phase = .finishing
+      $0.currentQuestion = InterviewAgent.closingRemark
+    }
+    await store.receive(\.closingSpoken) {
+      $0.phase = .finished
+    }
+    await store.receive(\.delegate.interviewFinished)
+
+    #expect(harness.contexts.value.count == 1)
+    #expect(harness.contexts.value[0].summary == nil)
+    #expect(harness.savedRecord.value?.summaryUsed == nil)
+    #expect(harness.savedRecord.value?.sessionID == UUID(0))
+  }
+
+  @Test
+  func standaloneDiscardConfirmsAndDelegatesCleanup() async {
+    let harness = Harness(summary: nil, serviceScript: [])
+    let store = harness.store
+    store.exhaustivity = .off
+
+    await store.send(.discardButtonTapped)
+    #expect(store.state.alert != nil)
+
+    await store.send(.alert(.presented(.confirmDiscard)))
+    await store.receive(\.delegate.discarded)
+  }
+
+  @Test
+  func linkedInterviewCancelConfirmsAndDelegatesCleanup() async {
+    let harness = Harness(summary: "Conversation summary.", serviceScript: [])
+    let store = harness.store
+    store.exhaustivity = .off
+
+    await store.send(.discardButtonTapped)
+    #expect(store.state.alert != nil)
+
+    await store.send(.alert(.presented(.confirmDiscard)))
+    await store.receive(\.delegate.discarded)
   }
 
   @Test

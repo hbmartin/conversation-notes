@@ -60,37 +60,42 @@ struct SettingsView: View {
   @Bindable var store: StoreOf<Settings>
 
   var body: some View {
-    Form {
-      Section {
-        SecureField("sk-ant-…", text: $store.apiKey)
-          .textInputAutocapitalization(.never)
-          .autocorrectionDisabled()
-      } header: {
-        Text("Anthropic API Key")
-      } footer: {
-        Text(
-          "Used for summarization and the post-conversation interview. Stored in the Keychain on this device only."
-        )
-      }
+    AuroraScreen {
+      Form {
+        Section {
+          SecureField("sk-ant-…", text: $store.apiKey)
+            .textInputAutocapitalization(.never)
+            .autocorrectionDisabled()
+        } header: {
+          Text("Anthropic API Key")
+        } footer: {
+          Text(
+            "Used for conversation summaries and guided interviews. Stored in the Keychain on this device only."
+          )
+        }
 
-      Section {
-        Button("Save") {
-          store.send(.saveTapped)
-        }
-        .disabled(store.apiKey.isEmpty)
-        if store.didSave {
-          Label("Saved", systemImage: "checkmark.circle.fill")
-            .foregroundStyle(.green)
-        }
-        if let errorMessage = store.errorMessage {
-          Text(errorMessage).foregroundStyle(.red)
-        }
-        Button("Remove Key", role: .destructive) {
-          store.send(.deleteTapped)
+        Section {
+          Button("Save") {
+            store.send(.saveTapped)
+          }
+          .disabled(store.apiKey.isEmpty)
+          if store.didSave {
+            Label("Saved", systemImage: "checkmark.circle.fill")
+              .foregroundStyle(.green)
+          }
+          if let errorMessage = store.errorMessage {
+            Text(errorMessage).foregroundStyle(.red)
+          }
+          Button("Remove Key", role: .destructive) {
+            store.send(.deleteTapped)
+          }
         }
       }
+      .scrollContentBackground(.hidden)
     }
     .navigationTitle("Settings")
+    .navigationBarTitleDisplayMode(.inline)
+    .toolbarBackground(.hidden, for: .navigationBar)
     .onAppear {
       store.send(.onAppear)
     }

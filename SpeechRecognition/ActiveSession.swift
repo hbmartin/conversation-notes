@@ -86,7 +86,7 @@ struct ActiveSession {
         return .merge(
           // Warm up the on-device transcription model while recording so it's ready by Stop.
           .run { _ in
-            try? await self.transcriptionClient.prepare(TranscriptionClient.locale)
+            try? await self.transcriptionClient.prepare()
           },
           .run { [id = state.session.id] send in
             await withTaskGroup(of: Void.self) { group in
@@ -312,14 +312,26 @@ struct ActiveSessionView: View {
 
   var body: some View {
     NavigationStack {
-      VStack(spacing: 24) {
-        Spacer()
-        content
-        Spacer()
+      AuroraScreen {
+        GeometryReader { geometry in
+          ScrollView {
+            VStack(spacing: 24) {
+              Spacer(minLength: 28)
+              content
+              Spacer(minLength: 28)
+            }
+            .frame(maxWidth: .infinity, minHeight: geometry.size.height)
+            .padding(.horizontal, 24)
+            .padding(.bottom, 12)
+          }
+          .scrollBounceBehavior(.basedOnSize)
+          .scrollIndicators(.hidden)
+        }
+        .frame(maxWidth: 680)
       }
-      .padding()
-      .navigationTitle("Session")
+      .navigationTitle("Conversation")
       .navigationBarTitleDisplayMode(.inline)
+      .toolbarBackground(.hidden, for: .navigationBar)
       .toolbar {
         ToolbarItem(placement: .cancellationAction) {
           Button("Discard", role: .destructive) {
@@ -343,102 +355,185 @@ struct ActiveSessionView: View {
   private var content: some View {
     switch store.phase {
     case .recording(let paused):
-      Image(systemName: "record.circle")
-        .font(.system(size: 56))
-        .foregroundStyle(paused ? .secondary : Color.red)
-        .symbolEffect(.pulse, isActive: !paused)
-      Text(Duration.seconds(store.elapsed).formatted(.time(pattern: .minuteSecond)))
-        .font(.largeTitle.monospacedDigit())
-      Text(paused ? "Paused" : "Recording")
-        .foregroundStyle(.secondary)
-      HStack(spacing: 16) {
-        Button(paused ? "Resume" : "Pause") {
-          store.send(paused ? .resumeTapped : .pauseTapped)
-        }
-        .buttonStyle(.bordered)
-        Button("Stop") {
-          store.send(.stopTapped)
-        }
-        .buttonStyle(.borderedProminent)
-        .tint(.red)
+      ZStack {
+        Circle()
+          .fill((paused ? Color.secondary : AppTheme.recording).opacity(0.14))
+        Circle()
+          .stroke((paused ? Color.secondary : AppTheme.recording).opacity(0.26), lineWidth: 14)
+          .padding(10)
+        Image(systemName: paused ? "pause.fill" : "waveform")
+          .font(.system(size: 48, weight: .semibold))
+          .foregroundStyle(paused ? .secondary : AppTheme.recording)
+          .symbolEffect(.pulse, isActive: !paused)
       }
+      .frame(width: 150, height: 150)
+      .accessibilityHidden(true)
+
+      Text(Duration.seconds(store.elapsed).formatted(.time(pattern: .minuteSecond)))
+        .font(.system(size: 54, weight: .bold, design: .rounded).monospacedDigit())
+        .contentTransition(.numericText())
+        .minimumScaleFactor(0.7)
+      Text(paused ? "Paused" : "Recording conversation")
+        .font(.headline)
+        .foregroundStyle(paused ? .secondary : AppTheme.recording)
+      Text(
+        "Keep this screen open or lock your device. The conversation continues recording in the background."
+      )
+      .font(.callout)
+      .foregroundStyle(.secondary)
+      .multilineTextAlignment(.center)
+      .fixedSize(horizontal: false, vertical: true)
+      .frame(maxWidth: 440)
+
+      GlassEffectContainer(spacing: 14) {
+        HStack(spacing: 14) {
+          Button {
+            store.send(paused ? .resumeTapped : .pauseTapped)
+          } label: {
+            Label(paused ? "Resume" : "Pause", systemImage: paused ? "play.fill" : "pause.fill")
+              .frame(maxWidth: .infinity)
+          }
+          .buttonStyle(.glass)
+          .controlSize(.large)
+
+          Button {
+            store.send(.stopTapped)
+          } label: {
+            Label("Stop", systemImage: "stop.fill")
+              .frame(maxWidth: .infinity)
+          }
+          .buttonStyle(.glassProminent)
+          .tint(AppTheme.recording)
+          .controlSize(.large)
+        }
+      }
+      .frame(maxWidth: 480)
+      .padding(.top, 14)
 
     case .stopping:
-      ProgressView()
-      Text("Stopping…").foregroundStyle(.secondary)
+      statusPanel(
+        icon: "stop.circle.fill",
+        color: AppTheme.recording,
+        title: "Finishing recording",
+        message: "Securing the audio before on-device transcription begins.",
+        showsProgress: true
+      )
 
     case .waitingForPower(let status):
-      Image(systemName: "battery.25percent")
-        .font(.system(size: 56))
-        .foregroundStyle(.orange)
-      Text("Plug in to transcribe")
-        .font(.title2)
-      Text(
-        """
-        Transcription is a heavy on-device task. Connect power or charge above \
-        30% (currently \(Int(status.batteryLevel * 100))%). Your recording is kept safely on \
-        this device.
-        """
+      statusPanel(
+        icon: "battery.25percent",
+        color: .orange,
+        title: "Plug in to transcribe",
+        message:
+          "Transcription is a heavy on-device task. Connect power or charge above 30% (currently \(Int(status.batteryLevel * 100))%). Your recording is kept safely on this device."
       )
-      .multilineTextAlignment(.center)
-      .foregroundStyle(.secondary)
       Button("Try Again") {
         store.send(.retryTranscriptionTapped)
       }
-      .buttonStyle(.borderedProminent)
+      .buttonStyle(.glassProminent)
+      .controlSize(.large)
 
     case .transcribing:
-      ProgressView()
-      Text("Transcribing on this device…")
-        .foregroundStyle(.secondary)
-      Text("The recording will be deleted as soon as transcription completes.")
-        .font(.footnote)
-        .foregroundStyle(.secondary)
-        .multilineTextAlignment(.center)
+      statusPanel(
+        icon: "waveform.and.magnifyingglass",
+        color: AppTheme.conversation,
+        title: "Transcribing on this device",
+        message: "The recording will be deleted as soon as transcription completes.",
+        showsProgress: true
+      )
 
     case .securingTranscript:
-      ProgressView()
-      Text("Securing transcript and deleting audio…")
-        .foregroundStyle(.secondary)
+      statusPanel(
+        icon: "lock.shield.fill",
+        color: AppTheme.conversation,
+        title: "Securing transcript",
+        message: "Deleting the source audio and preparing a compliance-safe summary.",
+        showsProgress: true
+      )
 
     case .pipeline:
       pipelineContent
 
     case .failed(let message):
-      Image(systemName: "exclamationmark.triangle.fill")
-        .font(.system(size: 56))
-        .foregroundStyle(.orange)
-      Text(message)
-        .multilineTextAlignment(.center)
+      statusPanel(
+        icon: "exclamationmark.triangle.fill",
+        color: .orange,
+        title: "This capture needs attention",
+        message: message
+      )
       if store.session.state == .stopped {
         Button("Retry") {
           store.send(.retryTranscriptionTapped)
         }
-        .buttonStyle(.borderedProminent)
+        .buttonStyle(.glassProminent)
+        .controlSize(.large)
       }
     }
+  }
+
+  private func statusPanel(
+    icon: String,
+    color: Color,
+    title: String,
+    message: String,
+    showsProgress: Bool = false
+  ) -> some View {
+    VStack(spacing: 18) {
+      Image(systemName: icon)
+        .font(.system(size: 50, weight: .semibold))
+        .foregroundStyle(color)
+      Text(title)
+        .font(.title2.bold())
+        .multilineTextAlignment(.center)
+      Text(message)
+        .foregroundStyle(.secondary)
+        .multilineTextAlignment(.center)
+        .fixedSize(horizontal: false, vertical: true)
+      if showsProgress {
+        ProgressView()
+          .controlSize(.large)
+          .tint(color)
+          .padding(.top, 4)
+      }
+    }
+    .frame(maxWidth: 520)
+    .padding(28)
+    .auroraPanel(cornerRadius: 28)
   }
 
   @ViewBuilder
   private var pipelineContent: some View {
     switch store.session.state {
     case .awaitingSummarization:
-      if store.session.summarizationFailure == nil {
-        ProgressView()
+      VStack(spacing: 16) {
+        Image(systemName: "sparkles")
+          .font(.system(size: 46, weight: .semibold))
+          .foregroundStyle(AppTheme.interview)
+        if store.session.summarizationFailure == nil {
+          ProgressView()
+            .controlSize(.large)
+        }
+        Text(
+          store.session.summarizationFailure == nil
+            ? "Creating your summary" : "Summary needs attention"
+        )
+        .font(.title2.bold())
+        SummarizationStatusView(
+          failure: store.session.summarizationFailure,
+          retry: { store.send(.retrySummarizationTapped) },
+          openSettings: { store.send(.openSettingsTapped) }
+        )
       }
-      Text(store.session.summarizationFailure == nil ? "Summarizing…" : "Summary needs attention")
-        .font(.title3)
-      SummarizationStatusView(
-        failure: store.session.summarizationFailure,
-        retry: { store.send(.retrySummarizationTapped) },
-        openSettings: { store.send(.openSettingsTapped) }
-      )
+      .frame(maxWidth: 540)
+      .padding(28)
+      .auroraPanel(cornerRadius: 28)
 
     case .summaryReady:
       ScrollView {
         VStack(alignment: .leading, spacing: 16) {
-          Text("Summary")
-            .font(.headline)
+          Label("Conversation summary", systemImage: "sparkles")
+            .font(.title3.bold())
+            .foregroundStyle(AppTheme.conversation)
           Text(store.session.summary ?? "")
           if let consent = store.session.consentUtterance {
             Text("Consent")
@@ -455,15 +550,20 @@ struct ActiveSessionView: View {
           }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(24)
+        .auroraPanel()
       }
       Button("Start Interview") {
         store.send(.startInterviewTapped)
       }
-      .buttonStyle(.borderedProminent)
+      .buttonStyle(.glassProminent)
+      .tint(AppTheme.interview)
+      .controlSize(.large)
       Button("Finish Later") {
         store.send(.doneTapped)
       }
-      .buttonStyle(.bordered)
+      .buttonStyle(.glass)
+      .controlSize(.large)
 
     default:
       ProgressView()

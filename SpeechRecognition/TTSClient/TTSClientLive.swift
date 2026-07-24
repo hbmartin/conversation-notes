@@ -59,6 +59,8 @@ private final class Delegate: NSObject, AVSpeechSynthesizerDelegate, Sendable {
     self.onDone = onDone
   }
 
+  deinit {}
+
   func finishCancelled() {
     self.resumeOnce(completed: false)
   }
