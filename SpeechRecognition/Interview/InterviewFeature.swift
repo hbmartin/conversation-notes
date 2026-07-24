@@ -313,14 +313,20 @@ struct Interview {
         return .send(.delegate(.openSettings))
 
       case .discardButtonTapped:
-        guard state.isStandalone else { return .none }
+        let isStandalone = state.isStandalone
         state.alert = AlertState {
-          TextState("Discard this interview?")
+          TextState(isStandalone ? "Discard this interview?" : "Cancel this interview?")
         } actions: {
-          ButtonState(role: .destructive, action: .confirmDiscard) { TextState("Discard") }
-          ButtonState(role: .cancel) { TextState("Keep Interview") }
+          ButtonState(role: .destructive, action: .confirmDiscard) {
+            TextState(isStandalone ? "Discard" : "Cancel Interview")
+          }
+          ButtonState(role: .cancel) { TextState("Keep Interviewing") }
         } message: {
-          TextState("Recorded answers from this unfinished interview will be permanently deleted.")
+          TextState(
+            isStandalone
+              ? "Recorded answers from this unfinished interview will be permanently deleted."
+              : "Partial answers will be deleted. You can restart from the conversation summary."
+          )
         }
         return .none
 
@@ -416,9 +422,9 @@ struct InterviewView: View {
     )
     .toolbarBackground(.hidden, for: .navigationBar)
     .toolbar {
-      if store.isStandalone {
+      if store.phase != .finished {
         ToolbarItem(placement: .cancellationAction) {
-          Button("Discard", role: .destructive) {
+          Button(store.isStandalone ? "Discard" : "Cancel", role: .destructive) {
             store.send(.discardButtonTapped)
           }
         }

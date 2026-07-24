@@ -136,7 +136,14 @@ struct AppFeature {
         )
 
       case .newConversationButtonTapped:
-        guard !state.isRequestingMicrophonePermission, state.activeSession == nil else {
+        guard
+          !state.isRequestingMicrophonePermission,
+          state.activeSession == nil,
+          !state.path.contains(where: { pathState in
+            if case .interview = pathState { return true }
+            return false
+          })
+        else {
           return .none
         }
         state.isRequestingMicrophonePermission = true
@@ -146,7 +153,14 @@ struct AppFeature {
         }
 
       case .newInterviewButtonTapped:
-        guard state.activeSession == nil else { return .none }
+        guard
+          !state.isRequestingMicrophonePermission,
+          state.activeSession == nil,
+          !state.path.contains(where: { pathState in
+            if case .interview = pathState { return true }
+            return false
+          })
+        else { return .none }
         guard state.isConnected else {
           state.alert = AlertState {
             TextState("You're offline")

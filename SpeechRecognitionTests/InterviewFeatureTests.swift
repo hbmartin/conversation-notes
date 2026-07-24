@@ -229,6 +229,19 @@ struct InterviewFeatureTests {
   }
 
   @Test
+  func linkedInterviewCancelConfirmsAndDelegatesCleanup() async {
+    let harness = Harness(summary: "Conversation summary.", serviceScript: [])
+    let store = harness.store
+    store.exhaustivity = .off
+
+    await store.send(.discardButtonTapped)
+    #expect(store.state.alert != nil)
+
+    await store.send(.alert(.presented(.confirmDiscard)))
+    await store.receive(\.delegate.discarded)
+  }
+
+  @Test
   func authorizationDenialNeverStartsCloudWorkAndIgnoresLateResponse() async {
     let harness = Harness(serviceScript: [])
     let store = harness.store

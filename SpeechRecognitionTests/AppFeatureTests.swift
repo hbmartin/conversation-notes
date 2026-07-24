@@ -369,6 +369,37 @@ struct AppFeatureTests {
   }
 
   @Test
+  func interviewCannotStartWhileConversationPermissionIsPending() async {
+    @Shared(.sessions) var sessions: IdentifiedArrayOf<Session> = []
+    let (permissionResponses, permissionContinuation) = AsyncStream.makeStream(of: Bool.self)
+    var state = AppFeature.State()
+    state.isConnected = true
+    let store = TestStore(initialState: state) {
+      AppFeature()
+    } withDependencies: {
+      $0.uuid = .incrementing
+      $0.date.now = Date(timeIntervalSince1970: 100)
+      $0.audioRecorder.requestRecordPermission = {
+        for await response in permissionResponses { return response }
+        return false
+      }
+    }
+    store.exhaustivity = .off
+
+    let permissionTask = await store.send(.newConversationButtonTapped)
+    await store.send(.newInterviewButtonTapped)
+
+    #expect(store.state.isRequestingMicrophonePermission)
+    #expect(store.state.sessions.isEmpty)
+    #expect(store.state.path.isEmpty)
+
+    permissionContinuation.yield(false)
+    permissionContinuation.finish()
+    await store.receive(\.recordPermissionResponse)
+    await permissionTask.finish()
+  }
+
+  @Test
   func standaloneInterviewWhileOfflineDoesNotCreateSession() async {
     @Shared(.sessions) var sessions: IdentifiedArrayOf<Session> = []
     let store = TestStore(initialState: AppFeature.State()) {

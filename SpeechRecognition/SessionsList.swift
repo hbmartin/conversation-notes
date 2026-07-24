@@ -83,7 +83,7 @@ struct SessionsListView: View {
       description: "Answer a guided voice debrief. No conversation recording is required.",
       systemImage: "text.bubble.fill",
       tint: AppTheme.interview,
-      isEnabled: true,
+      isEnabled: !store.isRequestingMicrophonePermission,
       action: { store.send(.newInterviewButtonTapped) }
     )
     .accessibilityHint("Starts a standalone guided interview")
