@@ -10,6 +10,8 @@ struct InterviewArtifactsClient: Sendable {
   var save: @Sendable (_ record: InterviewRecord) throws -> Void
   var load: @Sendable (_ interviewID: UUID) throws -> InterviewRecord
   var destroy: @Sendable (_ interviewID: UUID) throws -> Void
+  /// Every interview ID with artifacts on disk, for the launch-time orphan sweep.
+  var storedIDs: @Sendable () -> [UUID] = { [] }
 }
 
 extension InterviewArtifactsClient: TestDependencyKey {
@@ -26,8 +28,12 @@ extension InterviewArtifactsClient: DependencyKey {
   }
 
   static func live(baseDirectory: URL) -> Self {
+    let interviewsRoot = baseDirectory.appending(component: "interviews")
+    @Sendable func url(for id: UUID) -> URL {
+      interviewsRoot.appending(component: id.uuidString)
+    }
     @Sendable func directory(for id: UUID) throws -> URL {
-      let directory = baseDirectory.appending(components: "interviews", id.uuidString)
+      let directory = url(for: id)
       try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
       return directory
     }
@@ -52,10 +58,18 @@ extension InterviewArtifactsClient: DependencyKey {
         return try decoder.decode(InterviewRecord.self, from: data)
       },
       destroy: { id in
-        let url = baseDirectory.appending(components: "interviews", id.uuidString)
+        let url = url(for: id)
         if FileManager.default.fileExists(atPath: url.path()) {
           try FileManager.default.removeItem(at: url)
         }
+      },
+      storedIDs: {
+        let contents =
+          (try? FileManager.default.contentsOfDirectory(
+            at: interviewsRoot,
+            includingPropertiesForKeys: nil
+          )) ?? []
+        return contents.compactMap { UUID(uuidString: $0.lastPathComponent) }
       }
     )
   }

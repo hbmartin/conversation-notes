@@ -151,8 +151,8 @@ enum InterviewAgent {
     }
 
     return """
-      You are a structured debrief interviewer for a Medical Science Liaison (MSL) who has just \
-      finished a conversation with a healthcare professional (HCP). Interview the MSL by voice, \
+      You are a structured debrief interviewer for a Medical Science Liaison (MSL) reporting on \
+      an interaction with a healthcare professional (HCP). Interview the MSL by voice, \
       one question at a time.
 
       Rules:

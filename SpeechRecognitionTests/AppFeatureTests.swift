@@ -232,8 +232,11 @@ struct AppFeatureTests {
     let deniedID = UUID(3)
     let interviewingID = UUID(4)
     let standaloneInterviewingID = UUID(5)
+    let savedInterviewID = UUID(6)
     let linkedInterviewArtifactID = UUID(40)
     let standaloneInterviewArtifactID = UUID(50)
+    let retainedInterviewArtifactID = UUID(60)
+    let orphanInterviewArtifactID = UUID(70)
     let orphanVaultID = UUID(9)
     @Shared(.sessions) var sessions = [
       Session(id: recordingID, startDate: Date(timeIntervalSince1970: 0), state: .recording),
@@ -256,6 +259,13 @@ struct AppFeatureTests {
         state: .interviewing,
         interviewID: standaloneInterviewArtifactID
       ),
+      Session(
+        id: savedInterviewID,
+        kind: .interview,
+        startDate: Date(timeIntervalSince1970: 360),
+        state: .saved,
+        interviewID: retainedInterviewArtifactID
+      ),
     ]
     let events = LockIsolated<[String]>([])
     let store = TestStore(initialState: AppFeature.State()) {
@@ -270,6 +280,14 @@ struct AppFeatureTests {
       }
       $0.interviewArtifacts.destroy = { id in
         events.withValue { $0.append("interview.destroy(\(id))") }
+      }
+      $0.interviewArtifacts.storedIDs = {
+        [
+          linkedInterviewArtifactID,
+          standaloneInterviewArtifactID,
+          retainedInterviewArtifactID,
+          orphanInterviewArtifactID,
+        ]
       }
       // Never yields: connectivity is exercised separately so receive order is deterministic.
       $0.connectivity.observe = { AsyncStream { _ in } }
@@ -304,8 +322,13 @@ struct AppFeatureTests {
     #expect(store.state.sessions[id: deniedID]?.state == .permissionDenied)
     #expect(store.state.sessions[id: interviewingID]?.state == .summaryReady)
     #expect(store.state.sessions[id: standaloneInterviewingID]?.state == .lost)
+    // Interrupted interviews' partial artifacts and unreferenced directories are swept; the
+    // saved interview's retained record is untouched.
     #expect(events.value.contains("interview.destroy(\(linkedInterviewArtifactID))"))
     #expect(events.value.contains("interview.destroy(\(standaloneInterviewArtifactID))"))
+    #expect(events.value.contains("interview.destroy(\(orphanInterviewArtifactID))"))
+    #expect(!events.value.contains("interview.destroy(\(retainedInterviewArtifactID))"))
+    #expect(store.state.sessions[id: savedInterviewID]?.interviewID == retainedInterviewArtifactID)
 
     await task.cancel()
   }
@@ -338,7 +361,7 @@ struct AppFeatureTests {
   }
 
   @Test
-  func standaloneInterviewStartsWithoutConversationPermission() async {
+  func standaloneInterviewRequestsMicrophonePermissionThenStarts() async {
     @Shared(.sessions) var sessions: IdentifiedArrayOf<Session> = []
     let permissionRequests = LockIsolated(0)
     var state = AppFeature.State()
@@ -355,9 +378,14 @@ struct AppFeatureTests {
     }
     store.exhaustivity = .off
 
-    await store.send(.newInterviewButtonTapped)
+    await store.send(.newInterviewButtonTapped) {
+      $0.isRequestingMicrophonePermission = true
+    }
+    await store.receive(\.interviewPermissionResponse) {
+      $0.isRequestingMicrophonePermission = false
+    }
 
-    #expect(permissionRequests.value == 0)
+    #expect(permissionRequests.value == 1)
     #expect(store.state.activeSession == nil)
     #expect(store.state.path.count == 1)
     #expect(store.state.sessions.count == 1)
@@ -366,6 +394,33 @@ struct AppFeatureTests {
     #expect(store.state.sessions[0].state == .interviewing)
     #expect(store.state.sessions[0].summary == nil)
     #expect(store.state.sessions[0].interviewID == UUID(1))
+  }
+
+  @Test
+  func standaloneInterviewPermissionDenialRecordsDeniedSession() async {
+    @Shared(.sessions) var sessions: IdentifiedArrayOf<Session> = []
+    var state = AppFeature.State()
+    state.isConnected = true
+    let store = TestStore(initialState: state) {
+      AppFeature()
+    } withDependencies: {
+      $0.uuid = .incrementing
+      $0.date.now = Date(timeIntervalSince1970: 100)
+      $0.audioRecorder.requestRecordPermission = { false }
+    }
+    store.exhaustivity = .off
+
+    await store.send(.newInterviewButtonTapped)
+    await store.receive(\.interviewPermissionResponse) {
+      $0.isRequestingMicrophonePermission = false
+    }
+
+    #expect(store.state.alert != nil)
+    #expect(store.state.path.isEmpty)
+    #expect(store.state.sessions.count == 1)
+    #expect(store.state.sessions[0].kind == .interview)
+    #expect(store.state.sessions[0].state == .permissionDenied)
+    #expect(store.state.sessions[0].interviewID == nil)
   }
 
   @Test
@@ -402,14 +457,21 @@ struct AppFeatureTests {
   @Test
   func standaloneInterviewWhileOfflineDoesNotCreateSession() async {
     @Shared(.sessions) var sessions: IdentifiedArrayOf<Session> = []
+    let permissionRequests = LockIsolated(0)
     let store = TestStore(initialState: AppFeature.State()) {
       AppFeature()
+    } withDependencies: {
+      $0.audioRecorder.requestRecordPermission = {
+        permissionRequests.withValue { $0 += 1 }
+        return true
+      }
     }
     store.exhaustivity = .off
 
     await store.send(.newInterviewButtonTapped)
 
     #expect(store.state.alert != nil)
+    #expect(permissionRequests.value == 0)
     #expect(store.state.sessions.isEmpty)
     #expect(store.state.path.isEmpty)
   }
@@ -425,6 +487,7 @@ struct AppFeatureTests {
     } withDependencies: {
       $0.uuid = .incrementing
       $0.date.now = Date(timeIntervalSince1970: 100)
+      $0.audioRecorder.requestRecordPermission = { true }
       $0.interviewArtifacts.destroy = { id in
         destroyed.withValue { $0.append(id) }
       }
@@ -432,6 +495,7 @@ struct AppFeatureTests {
     store.exhaustivity = .off
 
     await store.send(.newInterviewButtonTapped)
+    await store.receive(\.interviewPermissionResponse)
     let completedRecord = InterviewRecord(
       id: UUID(1),
       sessionID: UUID(0),
@@ -453,6 +517,7 @@ struct AppFeatureTests {
     #expect(destroyed.value.isEmpty)
 
     await store.send(.newInterviewButtonTapped)
+    await store.receive(\.interviewPermissionResponse)
     let discardPathID = try #require(store.state.path.ids.first)
     await store.send(
       .path(
@@ -466,6 +531,81 @@ struct AppFeatureTests {
     #expect(store.state.sessions[id: UUID(2)] == nil)
     #expect(store.state.path.isEmpty)
     #expect(destroyed.value == [UUID(3)])
+  }
+
+  @Test
+  func abandoningStandaloneInterviewRemovesSessionAndArtifacts() async {
+    @Shared(.sessions) var sessions: IdentifiedArrayOf<Session> = []
+    let destroyed = LockIsolated<[UUID]>([])
+    var state = AppFeature.State()
+    state.isConnected = true
+    let store = TestStore(initialState: state) {
+      AppFeature()
+    } withDependencies: {
+      $0.uuid = .incrementing
+      $0.date.now = Date(timeIntervalSince1970: 100)
+      $0.audioRecorder.requestRecordPermission = { true }
+      $0.interviewArtifacts.destroy = { id in
+        destroyed.withValue { $0.append(id) }
+      }
+    }
+    store.exhaustivity = .off
+
+    await store.send(.newInterviewButtonTapped)
+    await store.receive(\.interviewPermissionResponse)
+    #expect(store.state.path.count == 1)
+
+    await store.send(.path(.popFrom(id: 0))).finish()
+
+    #expect(store.state.sessions.isEmpty)
+    #expect(store.state.path.isEmpty)
+    #expect(destroyed.value == [UUID(1)])
+  }
+
+  @Test
+  func discardingLinkedInterviewRestoresSummaryReadyAndDestroysArtifacts() async {
+    let sessionID = UUID(10)
+    @Shared(.sessions) var sessions = [
+      Session(
+        id: sessionID,
+        startDate: Date(timeIntervalSince1970: 0),
+        state: .summaryReady,
+        summary: "A summary."
+      )
+    ]
+    let destroyed = LockIsolated<[UUID]>([])
+    var state = AppFeature.State()
+    state.isConnected = true
+    let store = TestStore(initialState: state) {
+      AppFeature()
+    } withDependencies: {
+      $0.uuid = .incrementing
+      $0.interviewArtifacts.destroy = { id in
+        destroyed.withValue { $0.append(id) }
+      }
+    }
+    store.exhaustivity = .off
+
+    await store.send(.sessionTapped(sessionID))
+    await store.send(
+      .path(.element(id: 0, action: .detail(.delegate(.startInterview(sessionID)))))
+    )
+    #expect(store.state.sessions[id: sessionID]?.state == .interviewing)
+    #expect(store.state.sessions[id: sessionID]?.interviewID == UUID(0))
+
+    await store.send(
+      .path(
+        .element(
+          id: 1,
+          action: .interview(.delegate(.discarded(sessionID: sessionID, interviewID: UUID(0))))
+        )
+      )
+    ).finish()
+
+    #expect(store.state.path.count == 1)
+    #expect(store.state.sessions[id: sessionID]?.state == .summaryReady)
+    #expect(store.state.sessions[id: sessionID]?.interviewID == nil)
+    #expect(destroyed.value == [UUID(0)])
   }
 
   @Test

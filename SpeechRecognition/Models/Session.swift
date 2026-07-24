@@ -43,6 +43,8 @@ extension Session {
     case summaryServiceAudit
   }
 
+  /// Decoding is customized only to default `kind` for records written before it existed;
+  /// encoding stays compiler-synthesized from the same `CodingKeys`.
   init(from decoder: any Decoder) throws {
     let container = try decoder.container(keyedBy: CodingKeys.self)
     self.id = try container.decode(UUID.self, forKey: .id)
@@ -62,21 +64,6 @@ extension Session {
       ServiceAuditMetadata.self,
       forKey: .summaryServiceAudit
     )
-  }
-
-  func encode(to encoder: any Encoder) throws {
-    var container = encoder.container(keyedBy: CodingKeys.self)
-    try container.encode(self.id, forKey: .id)
-    try container.encode(self.kind, forKey: .kind)
-    try container.encode(self.startDate, forKey: .startDate)
-    try container.encode(self.duration, forKey: .duration)
-    try container.encode(self.state, forKey: .state)
-    try container.encodeIfPresent(self.summary, forKey: .summary)
-    try container.encodeIfPresent(self.consentUtterance, forKey: .consentUtterance)
-    try container.encodeIfPresent(self.interviewID, forKey: .interviewID)
-    try container.encodeIfPresent(self.lossReason, forKey: .lossReason)
-    try container.encodeIfPresent(self.summarizationFailure, forKey: .summarizationFailure)
-    try container.encodeIfPresent(self.summaryServiceAudit, forKey: .summaryServiceAudit)
   }
 }
 
