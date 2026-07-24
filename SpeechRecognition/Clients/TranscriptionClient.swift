@@ -24,22 +24,22 @@ struct Transcript: Codable, Equatable, Sendable {
 @DependencyClient
 struct TranscriptionClient: Sendable {
   var requestAuthorization: @Sendable () async -> Bool = { false }
-  /// Downloads any on-device model assets needed for `locale`. Call while recording so the model
-  /// is ready before the operator taps Stop.
-  var prepare: @Sendable (_ locale: Locale) async throws -> Void
+  /// Downloads the on-device model assets for the app's transcription locale. Call while recording
+  /// so the model is ready before the operator taps Stop.
+  var prepare: @Sendable () async throws -> Void
   var transcribe: @Sendable (_ audioURL: URL) async throws -> Transcript
 }
 
 extension TranscriptionClient {
-  /// The single locale v1 transcribes in. `prepare` callers and `transcribe` implementations
-  /// must agree on this so the warm-up installs the same model the batch pass uses.
+  /// The single locale v1 transcribes in. Both model warm-up and batch transcription use this
+  /// constant so they cannot drift apart.
   static let locale = Locale(identifier: "en-US")
 }
 
 extension TranscriptionClient: TestDependencyKey {
   static let previewValue = Self(
     requestAuthorization: { true },
-    prepare: { _ in },
+    prepare: {},
     transcribe: { _ in
       try await Task.sleep(for: .seconds(2))
       return Transcript(

@@ -26,7 +26,7 @@ struct SummaryResponse: Equatable, Sendable {
 struct InterviewContext: Equatable, Sendable {
   var interviewID: UUID
   var sessionID: Session.ID
-  var summary: String
+  var summary: String?
   var exchanges: [InterviewExchange]
 }
 

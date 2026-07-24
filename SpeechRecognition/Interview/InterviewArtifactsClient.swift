@@ -9,6 +9,7 @@ struct InterviewArtifactsClient: Sendable {
   var interviewDirectory: @Sendable (_ interviewID: UUID) throws -> URL
   var save: @Sendable (_ record: InterviewRecord) throws -> Void
   var load: @Sendable (_ interviewID: UUID) throws -> InterviewRecord
+  var destroy: @Sendable (_ interviewID: UUID) throws -> Void
 }
 
 extension InterviewArtifactsClient: TestDependencyKey {
@@ -49,6 +50,12 @@ extension InterviewArtifactsClient: DependencyKey {
           contentsOf: directory(for: id).appending(component: "record.json")
         )
         return try decoder.decode(InterviewRecord.self, from: data)
+      },
+      destroy: { id in
+        let url = baseDirectory.appending(components: "interviews", id.uuidString)
+        if FileManager.default.fileExists(atPath: url.path()) {
+          try FileManager.default.removeItem(at: url)
+        }
       }
     )
   }

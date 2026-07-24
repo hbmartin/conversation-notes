@@ -52,7 +52,7 @@ struct ActiveSessionTests {
       $0.transcriptVault.destroy = { id in
         events.withValue { $0.append("vault.destroy(\(id))") }
       }
-      $0.transcriptionClient.prepare = { _ in }
+      $0.transcriptionClient.prepare = {}
       $0.transcriptionClient.transcribe = { _ in Transcript(fullText: "hello world") }
       $0.powerState.powerStatus = { PowerStatus(isOnExternalPower: true, batteryLevel: 1) }
       configure(&$0)

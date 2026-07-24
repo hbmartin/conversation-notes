@@ -28,7 +28,8 @@ struct AppFeature {
 
   enum Action {
     case onLaunch
-    case newSessionButtonTapped
+    case newConversationButtonTapped
+    case newInterviewButtonTapped
     case recordPermissionResponse(Bool)
     case settingsButtonTapped
     case sessionTapped(Session.ID)
@@ -51,6 +52,7 @@ struct AppFeature {
   @Dependency(\.transcriptVault) var transcriptVault
   @Dependency(\.connectivity) var connectivity
   @Dependency(\.conversationService) var conversationService
+  @Dependency(\.interviewArtifacts) var interviewArtifacts
   @Dependency(\.continuousClock) var clock
   @Dependency(\.openURL) var openURL
   @Dependency(\.uuid) var uuid
@@ -76,15 +78,28 @@ struct AppFeature {
         let lostIDs = state.sessions
           .filter { [.recording, .stopped, .transcribing].contains($0.state) }
           .map(\.id)
+        let interruptedInterviews = state.sessions.compactMap { session -> (Session, UUID)? in
+          guard session.state == .interviewing, let interviewID = session.interviewID else {
+            return nil
+          }
+          return (session, interviewID)
+        }
         state.$sessions.withLock { sessions in
           for id in lostIDs {
             sessions[id: id]?.state = .lost
             sessions[id: id]?.lossReason =
               "The app closed before transcription completed, so this recording could not be recovered."
           }
-          // A crash mid-interview leaves the summary intact; the interview can simply be redone.
           for id in sessions.ids where sessions[id: id]?.state == .interviewing {
-            sessions[id: id]?.state = .summaryReady
+            if sessions[id: id]?.kind == .interview {
+              sessions[id: id]?.state = .lost
+              sessions[id: id]?.lossReason =
+                "The app closed before this interview finished, so its partial answers were removed."
+            } else {
+              // A linked interview can be redone because its conversation summary is intact.
+              sessions[id: id]?.state = .summaryReady
+            }
+            sessions[id: id]?.interviewID = nil
           }
         }
         let validIDs = Set(state.sessions.ids)
@@ -100,6 +115,9 @@ struct AppFeature {
             try? await self.audioStorage.purgeAllRecordings()
             for id in lostIDs {
               try? await self.transcriptVault.destroy(id)
+            }
+            for (_, interviewID) in interruptedInterviews {
+              try? self.interviewArtifacts.destroy(interviewID)
             }
             // Orphan sweep: vault files with no matching session.
             for id in await self.transcriptVault.pendingIDs() {
@@ -117,7 +135,7 @@ struct AppFeature {
           .cancellable(id: CancelID.connectivity)
         )
 
-      case .newSessionButtonTapped:
+      case .newConversationButtonTapped:
         guard !state.isRequestingMicrophonePermission, state.activeSession == nil else {
           return .none
         }
@@ -126,6 +144,37 @@ struct AppFeature {
           let allowed = await self.audioRecorder.requestRecordPermission()
           await send(.recordPermissionResponse(allowed))
         }
+
+      case .newInterviewButtonTapped:
+        guard state.activeSession == nil else { return .none }
+        guard state.isConnected else {
+          state.alert = AlertState {
+            TextState("You're offline")
+          } message: {
+            TextState("The guided interview needs a connection. Try again when you're online.")
+          }
+          return .none
+        }
+        let sessionID = self.uuid()
+        let interviewID = self.uuid()
+        let session = Session(
+          id: sessionID,
+          kind: .interview,
+          startDate: self.now,
+          state: .interviewing,
+          interviewID: interviewID
+        )
+        state.$sessions.withLock { _ = $0.append(session) }
+        state.path.append(
+          .interview(
+            Interview.State(
+              interviewID: interviewID,
+              sessionID: sessionID,
+              summary: nil
+            )
+          )
+        )
+        return .none
 
       case .recordPermissionResponse(true):
         guard state.isRequestingMicrophonePermission else { return .none }
@@ -260,11 +309,15 @@ struct AppFeature {
           state.path.append(.settings(Settings.State()))
           return .none
         case .delete(let id):
+          let interviewID = state.sessions[id: id]?.interviewID
           state.path.removeAll()
           state.$sessions.withLock { _ = $0.remove(id: id) }
           let cleanup = Effect<Action>.run { _ in
             try? await self.audioStorage.destroyRecording(id)
             try? await self.transcriptVault.destroy(id)
+            if let interviewID {
+              try? self.interviewArtifacts.destroy(interviewID)
+            }
           }
           if state.summarizationInFlightID == id {
             state.summarizationInFlightID = nil
@@ -290,18 +343,47 @@ struct AppFeature {
         state.path.append(.settings(Settings.State()))
         return .none
 
-      case .path(.popFrom(let pathID)):
-        guard let index = state.path.ids.firstIndex(of: pathID) else { return .none }
-        let abandonedSessionIDs = state.path[index...].compactMap { pathState -> Session.ID? in
-          guard case .interview(let interview) = pathState else { return nil }
-          return interview.sessionID
-        }
-        state.$sessions.withLock { sessions in
-          for id in abandonedSessionIDs where sessions[id: id]?.state == .interviewing {
-            sessions[id: id]?.state = .summaryReady
+      case .path(
+        .element(
+          let pathID,
+          action: .interview(.delegate(.discarded(let sessionID, let interviewID)))
+        )
+      ):
+        state.path.pop(from: pathID)
+        if state.sessions[id: sessionID]?.kind == .interview {
+          state.$sessions.withLock { _ = $0.remove(id: sessionID) }
+        } else {
+          state.$sessions.withLock { sessions in
+            sessions[id: sessionID]?.state = .summaryReady
+            sessions[id: sessionID]?.interviewID = nil
           }
         }
-        return .none
+        return .run { _ in
+          try? self.interviewArtifacts.destroy(interviewID)
+        }
+
+      case .path(.popFrom(let pathID)):
+        guard let index = state.path.ids.firstIndex(of: pathID) else { return .none }
+        let abandonedInterviews = state.path[index...].compactMap {
+          pathState -> (Session.ID, UUID)? in
+          guard case .interview(let interview) = pathState else { return nil }
+          return (interview.sessionID, interview.interviewID)
+        }
+        state.$sessions.withLock { sessions in
+          for (id, _) in abandonedInterviews where sessions[id: id]?.state == .interviewing {
+            if sessions[id: id]?.kind == .interview {
+              _ = sessions.remove(id: id)
+            } else {
+              sessions[id: id]?.state = .summaryReady
+              sessions[id: id]?.interviewID = nil
+            }
+          }
+        }
+        return .run { _ in
+          for (_, interviewID) in abandonedInterviews {
+            try? self.interviewArtifacts.destroy(interviewID)
+          }
+        }
 
       case .path:
         return .none
@@ -366,19 +448,18 @@ struct AppFeature {
     }
 
     guard
-      let scheduled = (
-        state.sessions
-        .filter { session in
-          session.state == .awaitingSummarization
-            && session.summarizationFailure?.requiredAction == .automaticRetry
-            && session.summarizationFailure?.nextRetryAt != nil
-        }
-        .compactMap({ session -> (Session.ID, Date)? in
-          guard let date = session.summarizationFailure?.nextRetryAt else { return nil }
-          return (session.id, date)
-        })
-        .min(by: { $0.1 < $1.1 })
-      )
+      let scheduled =
+        (state.sessions
+          .filter { session in
+            session.state == .awaitingSummarization
+              && session.summarizationFailure?.requiredAction == .automaticRetry
+              && session.summarizationFailure?.nextRetryAt != nil
+          }
+          .compactMap({ session -> (Session.ID, Date)? in
+            guard let date = session.summarizationFailure?.nextRetryAt else { return nil }
+            return (session.id, date)
+          })
+          .min(by: { $0.1 < $1.1 }))
     else { return .cancel(id: CancelID.retry) }
 
     let delay = max(0, scheduled.1.timeIntervalSince(now))
@@ -487,13 +568,15 @@ struct AppFeature {
       }
       return .none
     }
+    let interviewID = self.uuid()
     state.$sessions.withLock { sessions in
       sessions[id: sessionID]?.state = .interviewing
+      sessions[id: sessionID]?.interviewID = interviewID
     }
     state.path.append(
       .interview(
         Interview.State(
-          interviewID: self.uuid(),
+          interviewID: interviewID,
           sessionID: sessionID,
           summary: summary
         )

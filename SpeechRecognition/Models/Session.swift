@@ -8,6 +8,7 @@ import Foundation
 /// and `TranscriptVaultClient` and are destroyed as the pipeline advances.
 struct Session: Codable, Equatable, Identifiable, Sendable {
   let id: UUID
+  var kind: SessionKind = .conversation
   var startDate: Date
   var duration: TimeInterval = 0
   var state: SessionState
@@ -20,6 +21,63 @@ struct Session: Codable, Equatable, Identifiable, Sendable {
   var summarizationFailure: SummarizationFailure? = nil
   /// Audit correlation returned by the service that produced the retained summary.
   var summaryServiceAudit: ServiceAuditMetadata? = nil
+}
+
+enum SessionKind: String, Codable, Equatable, Sendable {
+  case conversation
+  case interview
+}
+
+extension Session {
+  private enum CodingKeys: String, CodingKey {
+    case id
+    case kind
+    case startDate
+    case duration
+    case state
+    case summary
+    case consentUtterance
+    case interviewID
+    case lossReason
+    case summarizationFailure
+    case summaryServiceAudit
+  }
+
+  init(from decoder: any Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    self.id = try container.decode(UUID.self, forKey: .id)
+    self.kind = try container.decodeIfPresent(SessionKind.self, forKey: .kind) ?? .conversation
+    self.startDate = try container.decode(Date.self, forKey: .startDate)
+    self.duration = try container.decodeIfPresent(TimeInterval.self, forKey: .duration) ?? 0
+    self.state = try container.decode(SessionState.self, forKey: .state)
+    self.summary = try container.decodeIfPresent(String.self, forKey: .summary)
+    self.consentUtterance = try container.decodeIfPresent(String.self, forKey: .consentUtterance)
+    self.interviewID = try container.decodeIfPresent(UUID.self, forKey: .interviewID)
+    self.lossReason = try container.decodeIfPresent(String.self, forKey: .lossReason)
+    self.summarizationFailure = try container.decodeIfPresent(
+      SummarizationFailure.self,
+      forKey: .summarizationFailure
+    )
+    self.summaryServiceAudit = try container.decodeIfPresent(
+      ServiceAuditMetadata.self,
+      forKey: .summaryServiceAudit
+    )
+  }
+
+  func encode(to encoder: any Encoder) throws {
+    var container = encoder.container(keyedBy: CodingKeys.self)
+    try container.encode(self.id, forKey: .id)
+    try container.encode(self.kind, forKey: .kind)
+    try container.encode(self.startDate, forKey: .startDate)
+    try container.encode(self.duration, forKey: .duration)
+    try container.encode(self.state, forKey: .state)
+    try container.encodeIfPresent(self.summary, forKey: .summary)
+    try container.encodeIfPresent(self.consentUtterance, forKey: .consentUtterance)
+    try container.encodeIfPresent(self.interviewID, forKey: .interviewID)
+    try container.encodeIfPresent(self.lossReason, forKey: .lossReason)
+    try container.encodeIfPresent(self.summarizationFailure, forKey: .summarizationFailure)
+    try container.encodeIfPresent(self.summaryServiceAudit, forKey: .summaryServiceAudit)
+  }
 }
 
 struct SummarizationFailure: Codable, Equatable, Sendable {
@@ -40,6 +98,33 @@ struct SummarizationFailure: Codable, Equatable, Sendable {
     case truncation
     case transcriptUnavailable
     case unknown
+
+    fileprivate var conversationServiceError: ConversationServiceError? {
+      switch self {
+      case .credentialsMissing:
+        return .credentialsMissing
+      case .credentialsRejected:
+        return .credentialsRejected
+      case .network:
+        return .network
+      case .rateLimited:
+        return .rateLimited(retryAfterSeconds: nil)
+      case .serviceUnavailable:
+        return .serviceUnavailable
+      case .requestRejected:
+        return .requestRejected
+      case .invalidResponse:
+        return .invalidResponse
+      case .refusal:
+        return .contentRefused
+      case .truncation:
+        return .responseTruncated
+      case .unknown:
+        return .unknown
+      case .transcriptUnavailable:
+        return nil
+      }
+    }
   }
 
   enum RequiredAction: String, Codable, Equatable, Sendable {
@@ -50,30 +135,11 @@ struct SummarizationFailure: Codable, Equatable, Sendable {
   }
 
   var userMessage: String {
-    switch self.kind {
-    case .credentialsMissing:
-      return "No service credential is configured. Add one in Settings."
-    case .credentialsRejected:
-      return "The service credential was rejected. Check it in Settings."
-    case .network:
-      return "A network error interrupted summarization."
-    case .rateLimited:
-      return "The service is temporarily rate-limiting requests."
-    case .serviceUnavailable:
-      return "The summarization service is temporarily unavailable."
-    case .requestRejected:
-      return "The summarization request was rejected. Contact support."
-    case .invalidResponse:
-      return "The summarization service returned an unexpected response. Contact support."
-    case .refusal:
-      return "The service declined to summarize this content. Contact support."
-    case .truncation:
-      return "The summarization response was incomplete. Contact support."
-    case .transcriptUnavailable:
+    if self.kind == .transcriptUnavailable {
       return "The encrypted transcript could not be loaded. Contact support."
-    case .unknown:
-      return "An unexpected summarization error occurred."
     }
+    return self.kind.conversationServiceError?.userMessage
+      ?? ConversationServiceError.unknown.userMessage
   }
 }
 

@@ -25,7 +25,7 @@
 	<key>NSMicrophoneUsageDescription</key>
 	<string>The microphone records your in-person scientific exchange and your spoken interview answers. Conversation audio is transcribed on this device and immediately deleted.</string>
 	<key>NSSpeechRecognitionUsageDescription</key>
-	<string>Speech recognition transcribes recorded conversations on this device and captures your spoken answers during the post-conversation interview.</string>
+	<string>Speech recognition transcribes recorded conversations on this device and captures your spoken answers during guided interviews.</string>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>
@@ -35,6 +35,8 @@
 	<array>
 		<string>audio</string>
 	</array>
+	<key>UILaunchScreen</key>
+	<dict/>
 	<key>UISupportedInterfaceOrientations</key>
 	<array>
 		<string>UIInterfaceOrientationPortrait</string>

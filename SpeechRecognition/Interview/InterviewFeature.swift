@@ -3,7 +3,7 @@ import Speech
 import SwiftUI
 import UIKit
 
-/// The post-conversation voice interview: a Claude agent asks one question at a time (spoken by
+/// The guided voice interview: a Claude agent asks one question at a time (spoken by
 /// TTS), the operator answers by voice (streamed by STT, committed on a silence timeout or the
 /// Done button), and the loop ends when the agent calls `record_interview` with the full field
 /// schema. Only domain Q&A history lives in state; the service implementation owns provider
@@ -14,7 +14,7 @@ struct Interview {
   struct State: Equatable {
     let interviewID: UUID
     let sessionID: UUID
-    let summary: String
+    let summary: String?
     var phase: Phase = .idle
     var currentQuestion = ""
     var partialAnswer = ""
@@ -24,6 +24,9 @@ struct Interview {
     var pendingRecord: InterviewRecord?
     var failure: FailureState?
     var startedAt: Date?
+    @Presents var alert: AlertState<Action.Alert>?
+
+    var isStandalone: Bool { self.summary == nil }
 
     enum Phase: Equatable {
       case idle
@@ -65,12 +68,19 @@ struct Interview {
     case saveFailed(InterviewRecord)
     case retryButtonTapped
     case appSettingsButtonTapped
+    case discardButtonTapped
+    case alert(PresentationAction<Alert>)
     case delegate(Delegate)
 
     @CasePathable
     enum Delegate {
       case interviewFinished(InterviewRecord)
+      case discarded(sessionID: Session.ID, interviewID: UUID)
       case openSettings
+    }
+
+    enum Alert: Equatable {
+      case confirmDiscard
     }
   }
 
@@ -302,10 +312,38 @@ struct Interview {
         guard state.failure?.settingsDestination == .app else { return .none }
         return .send(.delegate(.openSettings))
 
+      case .discardButtonTapped:
+        guard state.isStandalone else { return .none }
+        state.alert = AlertState {
+          TextState("Discard this interview?")
+        } actions: {
+          ButtonState(role: .destructive, action: .confirmDiscard) { TextState("Discard") }
+          ButtonState(role: .cancel) { TextState("Keep Interview") }
+        } message: {
+          TextState("Recorded answers from this unfinished interview will be permanently deleted.")
+        }
+        return .none
+
+      case .alert(.presented(.confirmDiscard)):
+        return .merge(
+          .cancel(id: CancelID.service),
+          .cancel(id: CancelID.tts),
+          .cancel(id: CancelID.stt),
+          .cancel(id: CancelID.silence),
+          .run { [sessionID = state.sessionID, interviewID = state.interviewID] send in
+            await self.speechClient.finishTask()
+            await send(.delegate(.discarded(sessionID: sessionID, interviewID: interviewID)))
+          }
+        )
+
+      case .alert:
+        return .none
+
       case .delegate:
         return .none
       }
     }
+    .ifLet(\.$alert, action: \.alert)
   }
 
   private func requestStep(_ state: State) -> Effect<Action> {
@@ -339,94 +377,196 @@ struct Interview {
 }
 
 struct InterviewView: View {
-  let store: StoreOf<Interview>
+  @Bindable var store: StoreOf<Interview>
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
   var body: some View {
-    VStack(spacing: 24) {
-      Spacer()
+    AuroraScreen {
+      GeometryReader { geometry in
+        ScrollView {
+          VStack(spacing: 22) {
+            Spacer(minLength: 22)
+            phaseContent
+            Spacer(minLength: 22)
+            if store.phase != .finished {
+              Label(
+                "Question \(store.turns.count + 1)",
+                systemImage: "point.3.connected.trianglepath.dotted"
+              )
+              .font(.footnote.weight(.semibold))
+              .foregroundStyle(.secondary)
+              .padding(.horizontal, 14)
+              .padding(.vertical, 8)
+              .background(.thinMaterial, in: .capsule)
+            }
+          }
+          .frame(maxWidth: .infinity, minHeight: geometry.size.height)
+          .padding(.horizontal, 24)
+          .padding(.bottom, 18)
+        }
+        .scrollBounceBehavior(.basedOnSize)
+        .scrollIndicators(.hidden)
+      }
+      .frame(maxWidth: 680)
+    }
+    .navigationTitle(store.isStandalone ? "Guided Interview" : "Conversation Interview")
+    .navigationBarTitleDisplayMode(.inline)
+    .navigationBarBackButtonHidden(
+      store.isStandalone || (store.phase != .finished && store.phase != .failed)
+    )
+    .toolbarBackground(.hidden, for: .navigationBar)
+    .toolbar {
+      if store.isStandalone {
+        ToolbarItem(placement: .cancellationAction) {
+          Button("Discard", role: .destructive) {
+            store.send(.discardButtonTapped)
+          }
+        }
+      }
+    }
+    .alert($store.scope(\.alert, action: \.alert))
+    .task {
+      await store.send(.task).finish()
+    }
+  }
 
-      switch store.phase {
-      case .idle, .authorizing, .processing, .committing:
+  @ViewBuilder
+  private var phaseContent: some View {
+    switch store.phase {
+    case .idle, .authorizing, .processing, .committing:
+      VStack(spacing: 18) {
+        Image(systemName: store.phase == .authorizing ? "waveform.badge.mic" : "sparkles")
+          .font(.system(size: 48, weight: .semibold))
+          .foregroundStyle(AppTheme.interview)
+          .symbolEffect(.pulse, isActive: !self.reduceMotion)
         ProgressView()
-        Text(store.phase == .authorizing ? "Requesting speech access…" : "Thinking…")
-          .foregroundStyle(.secondary)
-
-      case .speaking, .listening, .finishing:
-        Image(
-          systemName: store.phase == .listening
-            ? "waveform.circle.fill" : "speaker.wave.2.circle.fill"
+          .controlSize(.large)
+          .tint(AppTheme.interview)
+        Text(
+          store.phase == .authorizing ? "Preparing speech access" : "Preparing the next question"
         )
-        .font(.system(size: 56))
-        .foregroundStyle(store.phase == .listening ? .red : .blue)
-        .symbolEffect(.pulse, isActive: true)
+        .font(.title2.bold())
+        Text(
+          store.phase == .authorizing
+            ? "The interview listens only while you answer."
+            : "Your guided debrief is adapting to what you have shared."
+        )
+        .foregroundStyle(.secondary)
+        .multilineTextAlignment(.center)
+      }
+      .frame(maxWidth: 520)
+      .padding(30)
+      .auroraPanel(cornerRadius: 28)
+
+    case .speaking, .listening, .finishing:
+      VStack(spacing: 22) {
+        ZStack {
+          Circle()
+            .fill(AppTheme.interview.opacity(0.14))
+          Circle()
+            .stroke(AppTheme.interview.opacity(0.25), lineWidth: 12)
+            .padding(9)
+          Image(
+            systemName: store.phase == .listening
+              ? "waveform" : "speaker.wave.2.fill"
+          )
+          .font(.system(size: 44, weight: .semibold))
+          .foregroundStyle(AppTheme.interview)
+          .symbolEffect(.pulse, isActive: !self.reduceMotion)
+        }
+        .frame(width: 128, height: 128)
+        .accessibilityHidden(true)
+
+        Text(store.phase == .listening ? "Listening" : "Guided prompt")
+          .font(.subheadline.bold())
+          .foregroundStyle(AppTheme.interview)
+          .textCase(.uppercase)
 
         Text(store.currentQuestion)
-          .font(.title2)
+          .font(.system(.title, design: .rounded, weight: .bold))
           .multilineTextAlignment(.center)
-          .padding(.horizontal)
+          .fixedSize(horizontal: false, vertical: true)
 
         if store.phase == .listening {
-          Text(store.partialAnswer.isEmpty ? "Listening…" : store.partialAnswer)
-            .foregroundStyle(store.partialAnswer.isEmpty ? .secondary : .primary)
-            .multilineTextAlignment(.center)
-            .padding(.horizontal)
+          Text(
+            store.partialAnswer.isEmpty ? "Start speaking when you’re ready…" : store.partialAnswer
+          )
+          .font(.body)
+          .foregroundStyle(store.partialAnswer.isEmpty ? .secondary : .primary)
+          .multilineTextAlignment(.center)
+          .frame(maxWidth: .infinity, minHeight: 74)
+          .padding(20)
+          .auroraPanel(cornerRadius: 22)
+          .accessibilityLabel("Current answer")
 
-          Button("Done") {
+          Button {
             store.send(.doneButtonTapped)
+          } label: {
+            Label("Finish Answer", systemImage: "checkmark")
+              .frame(minWidth: 160)
           }
-          .buttonStyle(.borderedProminent)
+          .buttonStyle(.glassProminent)
+          .tint(AppTheme.interview)
+          .controlSize(.large)
+          .disabled(store.partialAnswer.isEmpty)
         }
+      }
 
-      case .finished:
+    case .finished:
+      VStack(spacing: 18) {
         Image(systemName: "checkmark.circle.fill")
-          .font(.system(size: 56))
+          .font(.system(size: 64))
           .foregroundStyle(.green)
         Text("Interview recorded")
-          .font(.title2)
-
-      case .failed:
-        Image(systemName: "exclamationmark.triangle.fill")
-          .font(.system(size: 56))
-          .foregroundStyle(.orange)
-        Text(store.failure?.message ?? "Something went wrong.")
+          .font(.title.bold())
+        Text("Your structured debrief and recorded answers are saved on this device.")
+          .foregroundStyle(.secondary)
           .multilineTextAlignment(.center)
-          .padding(.horizontal)
+      }
+      .frame(maxWidth: 520)
+      .padding(30)
+      .auroraPanel(cornerRadius: 28)
+
+    case .failed:
+      VStack(spacing: 18) {
+        Image(systemName: "exclamationmark.triangle.fill")
+          .font(.system(size: 52))
+          .foregroundStyle(.orange)
+        Text("Interview paused")
+          .font(.title2.bold())
+        Text(store.failure?.message ?? "Something went wrong.")
+          .foregroundStyle(.secondary)
+          .multilineTextAlignment(.center)
+          .fixedSize(horizontal: false, vertical: true)
         if store.failure?.isRetryable == true {
           Button("Retry") {
             store.send(.retryButtonTapped)
           }
-          .buttonStyle(.borderedProminent)
+          .buttonStyle(.glassProminent)
+          .tint(AppTheme.interview)
+          .controlSize(.large)
         }
         switch store.failure?.settingsDestination {
         case .app:
           Button("Open Settings") {
             store.send(.appSettingsButtonTapped)
           }
-          .buttonStyle(.bordered)
+          .buttonStyle(.glass)
+          .controlSize(.large)
         case .system:
           Link(
             "Open System Settings",
             destination: URL(string: UIApplication.openSettingsURLString)!
           )
-          .buttonStyle(.bordered)
+          .buttonStyle(.glass)
+          .controlSize(.large)
         case nil:
           EmptyView()
         }
       }
-
-      Spacer()
-
-      Text("Question \(store.turns.count + 1)")
-        .font(.footnote)
-        .foregroundStyle(.secondary)
-        .opacity(store.phase == .finished ? 0 : 1)
-    }
-    .padding()
-    .navigationTitle("Interview")
-    .navigationBarTitleDisplayMode(.inline)
-    .navigationBarBackButtonHidden(store.phase != .finished && store.phase != .failed)
-    .task {
-      await store.send(.task).finish()
+      .frame(maxWidth: 520)
+      .padding(30)
+      .auroraPanel(cornerRadius: 28)
     }
   }
 }

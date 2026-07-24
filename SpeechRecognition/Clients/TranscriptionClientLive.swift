@@ -27,8 +27,8 @@ extension TranscriptionClient: DependencyKey {
         // SFSpeechRecognizer authorization that the live-mic interview STT uses.
         true
       },
-      prepare: { locale in
-        _ = try await ensureModelAssets(for: locale)
+      prepare: {
+        _ = try await ensureModelAssets(for: TranscriptionClient.locale)
       },
       transcribe: { audioURL in
         // Without the model assets installed, the analyzer cannot determine its supported

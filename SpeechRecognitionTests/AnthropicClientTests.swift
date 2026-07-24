@@ -210,7 +210,8 @@ struct AnthropicClientTests {
 
   @Test
   func parseInvalidRequestPropagatesMessage() {
-    let body = #"{"type": "error", "error": {"type": "invalid_request_error", "message": "bad tool"}}"#
+    let body =
+      #"{"type": "error", "error": {"type": "invalid_request_error", "message": "bad tool"}}"#
     #expect(throws: AnthropicClientError.invalidRequest("bad tool")) {
       try AnthropicClient.parse(data: Data(body.utf8), response: httpResponse(status: 400))
     }
@@ -315,6 +316,43 @@ struct AnthropicClientTests {
   }
 
   @Test
+  func standaloneInterviewPromptRequiresAllFieldsWithoutSummaryContext() async throws {
+    let captured = LockIsolated<InterviewTurnRequest?>(nil)
+    let provider = AnthropicClient(
+      summarize: { _ in SummaryResponse(summary: "unused", consentUtterance: nil) },
+      interviewTurn: { request in
+        captured.setValue(request)
+        return AssistantTurn(
+          content: [.text("What is the HCP's specialty?")],
+          stopReason: .endTurn,
+          text: "What is the HCP's specialty?",
+          toolUse: nil
+        )
+      }
+    )
+    let client = withDependencies {
+      $0.anthropicClient = provider
+    } operation: {
+      ConversationServiceClient.liveValue
+    }
+
+    _ = try await client.nextInterviewStep(
+      InterviewContext(
+        interviewID: UUID(2),
+        sessionID: UUID(3),
+        summary: nil,
+        exchanges: []
+      )
+    )
+
+    let request = try #require(captured.value)
+    #expect(request.system.contains("standalone interview with no conversation summary"))
+    #expect(request.system.contains("Gather every required field"))
+    #expect(request.system.contains("adverse events or product complaints"))
+    #expect(request.system.contains("off-label discussion"))
+  }
+
+  @Test
   func anthropicErrorsMapToDomainErrors() {
     #expect(AnthropicClientError.missingAPIKey.conversationServiceError == .credentialsMissing)
     #expect(AnthropicClientError.unauthorized.conversationServiceError == .credentialsRejected)
@@ -322,7 +360,8 @@ struct AnthropicClientTests {
       AnthropicClientError.rateLimited(retryAfterSeconds: 12).conversationServiceError
         == .rateLimited(retryAfterSeconds: 12)
     )
-    #expect(AnthropicClientError.serverError(status: 529).conversationServiceError == .serviceUnavailable)
+    #expect(
+      AnthropicClientError.serverError(status: 529).conversationServiceError == .serviceUnavailable)
     #expect(AnthropicClientError.decoding("bad").conversationServiceError == .invalidResponse)
     #expect(AnthropicClientError.refused.conversationServiceError == .contentRefused)
   }

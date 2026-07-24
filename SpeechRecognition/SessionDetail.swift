@@ -87,118 +87,130 @@ struct SessionDetailView: View {
   @Bindable var store: StoreOf<SessionDetail>
 
   var body: some View {
-    List {
-      Section("Session") {
-        LabeledContent(
-          "Date", value: store.session.startDate.formatted(date: .abbreviated, time: .shortened)
-        )
-        if store.session.duration > 0 {
+    AuroraScreen {
+      List {
+        Section("Capture") {
           LabeledContent(
-            "Duration",
-            value: Duration.seconds(store.session.duration)
-              .formatted(.time(pattern: .minuteSecond))
-          )
-        }
-      }
-
-      switch store.session.state {
-      case .awaitingSummarization:
-        Section {
-          SummarizationStatusView(
-            failure: store.session.summarizationFailure,
-            retry: { store.send(.retrySummarizationTapped) },
-            openSettings: { store.send(.openSettingsTapped) }
-          )
-        }
-
-      case .permissionDenied:
-        Section {
-          Label(
-            store.session.lossReason ?? "Microphone access was denied before recording began.",
-            systemImage: "mic.slash"
-          )
-          .foregroundStyle(.orange)
-          Link(
-            "Open System Settings",
-            destination: URL(string: UIApplication.openSettingsURLString)!
-          )
-        }
-
-      case .lost:
-        Section {
-          Label(
-            store.session.lossReason ?? "This session was lost before transcription completed.",
-            systemImage: "exclamationmark.triangle"
-          )
-          .foregroundStyle(.red)
-        }
-
-      default:
-        if let summary = store.session.summary {
-          Section("Summary") {
-            Text(summary)
-          }
-          Section("Consent") {
-            if let consent = store.session.consentUtterance {
-              Text("“\(consent)”").italic()
-            } else {
-              Label(
-                "No consent statement was found in the conversation.",
-                systemImage: "exclamationmark.triangle"
-              )
-              .foregroundStyle(.orange)
-            }
-          }
-        }
-      }
-
-      if store.session.state == .summaryReady {
-        Section {
-          Button("Start Interview") {
-            store.send(.startInterviewTapped)
-          }
-        }
-      }
-
-      if let extraction = store.interviewRecord?.extraction {
-        Section("Interview") {
-          LabeledContent("HCP specialty", value: extraction.hcpSpecialty)
-          LabeledContent("Topics", value: extraction.topicsDiscussed.joined(separator: ", "))
-          LabeledContent("Key questions", value: extraction.keyScientificQuestions)
-          LabeledContent("Unanswered follow-ups", value: extraction.unansweredFollowUps)
-          LabeledContent("Med-info requests", value: extraction.medInfoRequests)
-          LabeledContent(
-            "Adverse event / complaint",
-            value: extraction.adverseEventReported
-              ? "Yes — \(extraction.adverseEventDetail)" : "No"
+            "Type",
+            value: store.session.kind == .conversation ? "Conversation" : "Guided Interview"
           )
           LabeledContent(
-            "Off-label discussion",
-            value: extraction.offLabelDiscussed ? "Yes — \(extraction.offLabelDetail)" : "No"
+            "Date", value: store.session.startDate.formatted(date: .abbreviated, time: .shortened)
           )
-          LabeledContent("HCP sentiment", value: extraction.hcpSentiment.rawValue.capitalized)
-          LabeledContent("Next steps", value: extraction.commitmentsNextSteps)
-          LabeledContent("Follow-up needed", value: extraction.followUpNeeded ? "Yes" : "No")
+          if store.session.duration > 0 {
+            LabeledContent(
+              "Duration",
+              value: Duration.seconds(store.session.duration)
+                .formatted(.time(pattern: .minuteSecond))
+            )
+          }
         }
-        if extraction.adverseEventReported {
+
+        switch store.session.state {
+        case .awaitingSummarization:
+          Section {
+            SummarizationStatusView(
+              failure: store.session.summarizationFailure,
+              retry: { store.send(.retrySummarizationTapped) },
+              openSettings: { store.send(.openSettingsTapped) }
+            )
+          }
+
+        case .permissionDenied:
           Section {
             Label(
-              "An adverse event or product complaint was captured. Reporting it through your pharmacovigilance process is your responsibility — this app does not transmit reports.",
-              systemImage: "exclamationmark.shield"
+              store.session.lossReason ?? "Microphone access was denied before recording began.",
+              systemImage: "mic.slash"
+            )
+            .foregroundStyle(.orange)
+            Link(
+              "Open System Settings",
+              destination: URL(string: UIApplication.openSettingsURLString)!
+            )
+          }
+
+        case .lost:
+          Section {
+            Label(
+              store.session.lossReason ?? "This session was interrupted before it completed.",
+              systemImage: "exclamationmark.triangle"
             )
             .foregroundStyle(.red)
           }
-        }
-      }
 
-      Section {
-        Button("Delete Session", role: .destructive) {
-          store.send(.deleteTapped)
+        default:
+          if store.session.kind == .conversation, let summary = store.session.summary {
+            Section("Summary") {
+              Text(summary)
+            }
+            Section("Consent") {
+              if let consent = store.session.consentUtterance {
+                Text("“\(consent)”").italic()
+              } else {
+                Label(
+                  "No consent statement was found in the conversation.",
+                  systemImage: "exclamationmark.triangle"
+                )
+                .foregroundStyle(.orange)
+              }
+            }
+          }
+        }
+
+        if store.session.kind == .conversation, store.session.state == .summaryReady {
+          Section {
+            Button {
+              store.send(.startInterviewTapped)
+            } label: {
+              Label("Start Guided Interview", systemImage: "text.bubble.fill")
+            }
+            .foregroundStyle(AppTheme.interview)
+          }
+        }
+
+        if let extraction = store.interviewRecord?.extraction {
+          Section("Interview") {
+            LabeledContent("HCP specialty", value: extraction.hcpSpecialty)
+            LabeledContent("Topics", value: extraction.topicsDiscussed.joined(separator: ", "))
+            LabeledContent("Key questions", value: extraction.keyScientificQuestions)
+            LabeledContent("Unanswered follow-ups", value: extraction.unansweredFollowUps)
+            LabeledContent("Med-info requests", value: extraction.medInfoRequests)
+            LabeledContent(
+              "Adverse event / complaint",
+              value: extraction.adverseEventReported
+                ? "Yes — \(extraction.adverseEventDetail)" : "No"
+            )
+            LabeledContent(
+              "Off-label discussion",
+              value: extraction.offLabelDiscussed ? "Yes — \(extraction.offLabelDetail)" : "No"
+            )
+            LabeledContent("HCP sentiment", value: extraction.hcpSentiment.rawValue.capitalized)
+            LabeledContent("Next steps", value: extraction.commitmentsNextSteps)
+            LabeledContent("Follow-up needed", value: extraction.followUpNeeded ? "Yes" : "No")
+          }
+          if extraction.adverseEventReported {
+            Section {
+              Label(
+                "An adverse event or product complaint was captured. Reporting it through your pharmacovigilance process is your responsibility — this app does not transmit reports.",
+                systemImage: "exclamationmark.shield"
+              )
+              .foregroundStyle(.red)
+            }
+          }
+        }
+
+        Section {
+          Button("Delete Session", role: .destructive) {
+            store.send(.deleteTapped)
+          }
         }
       }
+      .scrollContentBackground(.hidden)
+      .listStyle(.insetGrouped)
     }
-    .navigationTitle("Session")
+    .navigationTitle(store.session.kind == .conversation ? "Conversation" : "Guided Interview")
     .navigationBarTitleDisplayMode(.inline)
+    .toolbarBackground(.hidden, for: .navigationBar)
     .alert($store.scope(state: \.alert, action: \.alert))
     .onAppear {
       store.send(.onAppear)
@@ -230,16 +242,19 @@ struct SummarizationStatusView: View {
         }
       case .openSettings:
         Button("Open Settings", action: self.openSettings)
-          .buttonStyle(.borderedProminent)
+          .buttonStyle(.glassProminent)
       case .retryNow:
         Label(
           failure.nextRetryAt == nil ? "Manual retry required" : "Retry requested",
           systemImage: "arrow.clockwise"
         )
-          .foregroundStyle(.secondary)
+        .foregroundStyle(.secondary)
       case .contactSupport:
-        Label("Contact your administrator or support team.", systemImage: "person.crop.circle.badge.questionmark")
-          .foregroundStyle(.secondary)
+        Label(
+          "Contact your administrator or support team.",
+          systemImage: "person.crop.circle.badge.questionmark"
+        )
+        .foregroundStyle(.secondary)
       }
     } else {
       Label(
@@ -249,6 +264,7 @@ struct SummarizationStatusView: View {
     }
 
     Button("Retry This Session", action: self.retry)
+      .buttonStyle(.glass)
       .disabled(
         failure?.requiredAction == .retryNow && failure?.nextRetryAt != nil
       )
