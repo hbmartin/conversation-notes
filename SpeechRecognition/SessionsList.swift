@@ -41,6 +41,7 @@ struct SessionsListView: View {
           Label("New Session", systemImage: "record.circle.fill")
         }
         .tint(.red)
+        .disabled(store.isRequestingMicrophonePermission)
       }
     }
   }
@@ -78,13 +79,29 @@ private struct SessionRow: View {
     case .recording, .stopped, .transcribing:
       badge("In progress", color: .blue)
     case .awaitingSummarization:
-      badge("Queued", color: .orange)
+      switch session.summarizationFailure?.requiredAction {
+      case .openSettings:
+        badge("Needs credentials", color: .red)
+      case .contactSupport:
+        badge("Needs attention", color: .red)
+      case .automaticRetry:
+        badge("Retry scheduled", color: .orange)
+      case .retryNow:
+        badge(
+          session.summarizationFailure?.nextRetryAt == nil ? "Retry required" : "Retrying",
+          color: .orange
+        )
+      case nil:
+        badge("Queued", color: .orange)
+      }
     case .summaryReady:
       badge("Needs interview", color: .purple)
     case .interviewing:
       badge("Interviewing", color: .purple)
     case .saved:
       badge("Saved", color: .green)
+    case .permissionDenied:
+      badge("Permission denied", color: .orange)
     case .lost:
       badge("Lost", color: .red)
     }

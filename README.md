@@ -14,7 +14,8 @@ can finish.
 ```text
 record → transcribe (on-device, SpeechAnalyzer) → transcript into encrypted vault
        → DESTROY AUDIO
-       → summarize + extract consent (Anthropic API; queues offline) → DESTROY TRANSCRIPT
+       → summarize + extract consent (conversation-service boundary; queues offline)
+       → DESTROY TRANSCRIPT
        → SummaryReady → voice interview (retained: audio + transcript + extraction)
 ```
 
@@ -33,8 +34,15 @@ storage is device-only; there is no backend or export in v1.
 1. Open `SpeechRecognition.xcodeproj` and run the
    `SpeechRecognition` target (iOS 26+; the on-device engine is `SpeechAnalyzer`).
 2. In the app, open **Settings** (gear icon) and paste an Anthropic API key. It is stored in
-   the Keychain, device-only. Summarization and the interview call
-   `POST https://api.anthropic.com/v1/messages` (`claude-opus-4-8`) directly.
+   the Keychain, device-only.
+
+Remote features depend only on the provider-neutral `ConversationServiceClient`. The current live
+implementation is a temporary BYOK adapter that calls Anthropic directly. It is retained to keep
+this prototype runnable, but **must not be treated as the production deployment architecture**.
+A production build should replace that adapter with an authenticated gateway that owns provider
+credentials, prompt/model versions, rate and cost policy, audit correlation, revocation, and data
+retention enforcement. Reducers and persisted domain models do not expose Anthropic request types,
+so that replacement does not require feature changes.
 
 ## v1 limitations (by design)
 
@@ -47,3 +55,5 @@ storage is device-only; there is no backend or export in v1.
   capture depends entirely on the operator interview — both accepted risks in the product spec.
 * The app flags adverse events but never reports them; reporting is the operator's
   responsibility.
+* The gateway transport and its authentication/token exchange are intentionally not implemented in
+  this repository yet; only the app-side service boundary and audit metadata seam are present.

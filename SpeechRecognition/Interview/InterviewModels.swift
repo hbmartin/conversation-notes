@@ -57,6 +57,8 @@ struct InterviewRecord: Codable, Equatable, Identifiable, Sendable {
   var model: String
   var schemaVersion = 1
   var operatorEdits: [FieldEdit]?
+  /// Optional for backward-compatible decoding of records written before service auditing.
+  var serviceAuditTrail: [ServiceAuditMetadata]? = nil
 }
 
 struct InterviewTurn: Codable, Equatable, Sendable {

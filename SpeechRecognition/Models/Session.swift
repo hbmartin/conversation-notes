@@ -15,6 +15,66 @@ struct Session: Codable, Equatable, Identifiable, Sendable {
   var consentUtterance: String?
   var interviewID: UUID?
   var lossReason: String?
+  /// Durable queue failure state. Optional so sessions written by older app versions continue to
+  /// decode without a migration.
+  var summarizationFailure: SummarizationFailure? = nil
+  /// Audit correlation returned by the service that produced the retained summary.
+  var summaryServiceAudit: ServiceAuditMetadata? = nil
+}
+
+struct SummarizationFailure: Codable, Equatable, Sendable {
+  var kind: Kind
+  var attemptCount: Int
+  var nextRetryAt: Date?
+  var requiredAction: RequiredAction
+
+  enum Kind: String, Codable, Equatable, Sendable {
+    case credentialsMissing
+    case credentialsRejected
+    case network
+    case rateLimited
+    case serviceUnavailable
+    case requestRejected
+    case invalidResponse
+    case refusal
+    case truncation
+    case transcriptUnavailable
+    case unknown
+  }
+
+  enum RequiredAction: String, Codable, Equatable, Sendable {
+    case automaticRetry
+    case openSettings
+    case retryNow
+    case contactSupport
+  }
+
+  var userMessage: String {
+    switch self.kind {
+    case .credentialsMissing:
+      return "No service credential is configured. Add one in Settings."
+    case .credentialsRejected:
+      return "The service credential was rejected. Check it in Settings."
+    case .network:
+      return "A network error interrupted summarization."
+    case .rateLimited:
+      return "The service is temporarily rate-limiting requests."
+    case .serviceUnavailable:
+      return "The summarization service is temporarily unavailable."
+    case .requestRejected:
+      return "The summarization request was rejected. Contact support."
+    case .invalidResponse:
+      return "The summarization service returned an unexpected response. Contact support."
+    case .refusal:
+      return "The service declined to summarize this content. Contact support."
+    case .truncation:
+      return "The summarization response was incomplete. Contact support."
+    case .transcriptUnavailable:
+      return "The encrypted transcript could not be loaded. Contact support."
+    case .unknown:
+      return "An unexpected summarization error occurred."
+    }
+  }
 }
 
 enum SessionState: String, Codable, Equatable, Sendable {
@@ -32,6 +92,8 @@ enum SessionState: String, Codable, Equatable, Sendable {
   case interviewing
   /// Interview complete; all retained artifacts saved.
   case saved
+  /// The operator denied microphone access before recording began.
+  case permissionDenied
   /// Terminal: the recording was interrupted before transcription completed; artifacts purged.
   case lost
 }

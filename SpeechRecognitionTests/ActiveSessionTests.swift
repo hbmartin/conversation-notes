@@ -233,4 +233,33 @@ struct ActiveSessionTests {
 
     await task.cancel()
   }
+
+  @Test
+  func staleRecorderFailureCannotReviveOrLoseCompletedCapture() async {
+    struct RecorderError: Error {}
+    let id = UUID(0)
+    @Shared(.sessions) var sessions = [
+      Session(
+        id: id,
+        startDate: Date(timeIntervalSince1970: 0),
+        state: .awaitingSummarization
+      )
+    ]
+    var state = ActiveSession.State(session: Shared($sessions[id: id])!)
+    state.phase = .pipeline
+    let cleanupCalls = LockIsolated(0)
+    let store = TestStore(initialState: state) {
+      ActiveSession()
+    } withDependencies: {
+      $0.audioStorage.destroyRecording = { _ in cleanupCalls.withValue { $0 += 1 } }
+      $0.transcriptVault.destroy = { _ in cleanupCalls.withValue { $0 += 1 } }
+    }
+
+    await store.send(.recorderDidFinish(.failure(RecorderError())))
+
+    #expect(store.state.phase == .pipeline)
+    #expect(store.state.session.state == .awaitingSummarization)
+    #expect(store.state.alert == nil)
+    #expect(cleanupCalls.value == 0)
+  }
 }

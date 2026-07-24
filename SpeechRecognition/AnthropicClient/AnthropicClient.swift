@@ -8,18 +8,8 @@ import Foundation
 /// - `interviewTurn`: one turn of the post-conversation interview agent loop.
 @DependencyClient
 struct AnthropicClient: Sendable {
-  var summarize: @Sendable (_ transcript: String) async throws -> SummarizationResult
+  var summarize: @Sendable (_ transcript: String) async throws -> SummaryResponse
   var interviewTurn: @Sendable (_ request: InterviewTurnRequest) async throws -> AssistantTurn
-}
-
-struct SummarizationResult: Codable, Equatable, Sendable {
-  var summary: String
-  var consentUtterance: String?
-
-  private enum CodingKeys: String, CodingKey {
-    case summary
-    case consentUtterance = "consent_utterance"
-  }
 }
 
 struct InterviewTurnRequest: Equatable, Sendable {
@@ -29,6 +19,16 @@ struct InterviewTurnRequest: Equatable, Sendable {
   var maxTokens = 2_000
 }
 
+struct AnthropicSummaryPayload: Codable, Equatable, Sendable {
+  var summary: String
+  var consentUtterance: String?
+
+  private enum CodingKeys: String, CodingKey {
+    case summary
+    case consentUtterance = "consent_utterance"
+  }
+}
+
 struct AssistantTurn: Equatable, Sendable {
   /// The full block array, echoed back verbatim into the conversation history.
   var content: [ContentBlock]
@@ -36,6 +36,7 @@ struct AssistantTurn: Equatable, Sendable {
   /// Concatenated text blocks — the next question to speak, when `stopReason == .endTurn`.
   var text: String
   var toolUse: ToolUseCall?
+  var audit: ServiceAuditMetadata? = nil
 
   struct ToolUseCall: Equatable, Sendable {
     var id: String
@@ -45,13 +46,18 @@ struct AssistantTurn: Equatable, Sendable {
 }
 
 extension AssistantTurn {
-  init(response: MessagesResponse) {
+  init(response: MessagesResponse, promptVersion: String) {
     self.content = response.content
     self.stopReason = response.stopReason
     self.text = response.text
     self.toolUse = response.firstToolUse.map {
       ToolUseCall(id: $0.id, name: $0.name, input: $0.input)
     }
+    self.audit = ServiceAuditMetadata(
+      requestID: response.id,
+      modelVersion: response.model,
+      promptVersion: promptVersion
+    )
   }
 }
 
@@ -94,6 +100,31 @@ enum AnthropicClientError: Error, Equatable {
       return "The service declined to process this content."
     case .truncated:
       return "The response was cut short. Try again."
+    }
+  }
+}
+
+extension AnthropicClientError {
+  var conversationServiceError: ConversationServiceError {
+    switch self {
+    case .missingAPIKey:
+      return .credentialsMissing
+    case .unauthorized:
+      return .credentialsRejected
+    case .invalidRequest:
+      return .requestRejected
+    case .rateLimited(let retryAfterSeconds):
+      return .rateLimited(retryAfterSeconds: retryAfterSeconds)
+    case .serverError:
+      return .serviceUnavailable
+    case .network:
+      return .network
+    case .decoding:
+      return .invalidResponse
+    case .refused:
+      return .contentRefused
+    case .truncated:
+      return .responseTruncated
     }
   }
 }
@@ -149,12 +180,17 @@ extension AnthropicClient: TestDependencyKey {
     return Self(
       summarize: { _ in
         try await Task.sleep(for: .seconds(1))
-        return SummarizationResult(
+        return SummaryResponse(
           summary: """
             The MSL walked the HCP through phase 3 efficacy data. The HCP raised questions \
             about the subgroup analysis methodology and requested the related publication.
             """,
-          consentUtterance: "Yes, that's fine, go ahead."
+          consentUtterance: "Yes, that's fine, go ahead.",
+          audit: ServiceAuditMetadata(
+            requestID: "preview-summary",
+            modelVersion: AnthropicModel.opus,
+            promptVersion: AnthropicClient.summaryPromptVersion
+          )
         )
       },
       interviewTurn: { _ in

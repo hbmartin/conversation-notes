@@ -46,7 +46,6 @@
 /* Begin PBXFileReference section */
 		CA23320A2447ACFA00B818EB /* SpeechRecognition.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = SpeechRecognition.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		CA2332202447ACFC00B818EB /* SpeechRecognitionTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = SpeechRecognitionTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
-		CA23322F2447AE0300B818EB /* swift-composable-architecture */ = {isa = PBXFileReference; lastKnownFileType = folder; name = "swift-composable-architecture"; path = ../..; sourceTree = "<group>"; };
 		DCB9EA3F26B21ED000497C03 /* README.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = README.md; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -106,7 +105,6 @@
 		CA2332012447ACFA00B818EB = {
 			isa = PBXGroup;
 			children = (
-				CA23322F2447AE0300B818EB /* swift-composable-architecture */,
 				DCB9EA3F26B21ED000497C03 /* README.md */,
 				CA23320B2447ACFA00B818EB /* Products */,
 				A1000000000000000000F001 /* SpeechRecognition */,
@@ -203,6 +201,9 @@
 			);
 			mainGroup = CA2332012447ACFA00B818EB;
 			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				DC1394142469E34200EE1156 /* XCRemoteSwiftPackageReference "swift-composable-architecture" */,
+			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = CA23320B2447ACFA00B818EB /* Products */;
 			projectDirPath = "";
@@ -481,9 +482,21 @@
 		};
 /* End XCConfigurationList section */
 
+/* Begin XCRemoteSwiftPackageReference section */
+		DC1394142469E34200EE1156 /* XCRemoteSwiftPackageReference "swift-composable-architecture" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/pointfreeco/swift-composable-architecture";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 1.15.0;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
 /* Begin XCSwiftPackageProductDependency section */
 		DC1394152469E34200EE1157 /* ComposableArchitecture */ = {
 			isa = XCSwiftPackageProductDependency;
+			package = DC1394142469E34200EE1156 /* XCRemoteSwiftPackageReference "swift-composable-architecture" */;
 			productName = ComposableArchitecture;
 		};
 /* End XCSwiftPackageProductDependency section */
