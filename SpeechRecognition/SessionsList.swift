@@ -171,7 +171,7 @@ private struct CaptureActionButton: View {
     .glassEffect(.regular.tint(self.tint.opacity(0.28)).interactive(), in: .rect(cornerRadius: 30))
     .disabled(!self.isEnabled)
     .opacity(self.isEnabled ? 1 : 0.58)
-    .accessibilityLabel(self.title)
+    .accessibilityLabel("\(self.title). \(self.description)")
   }
 }
 
@@ -254,7 +254,7 @@ private struct SessionRow: View {
     case .summaryReady:
       badge("Needs interview", color: .purple)
     case .interviewing:
-      badge("Interviewing", color: .purple)
+      badge("Interviewing", color: AppTheme.interview)
     case .saved:
       badge(session.kind == .interview ? "Recorded" : "Saved", color: .green)
     case .permissionDenied:

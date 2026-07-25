@@ -24,6 +24,17 @@ struct AppFeature {
     var isRequestingMicrophonePermission = false
     /// Only concurrency is transient; retry eligibility and timing live on each persisted session.
     var summarizationInFlightID: Session.ID?
+
+    /// A new capture cannot begin while another microphone workflow — a pending permission
+    /// prompt, an active recording, or an interview — is underway.
+    var canStartCapture: Bool {
+      !self.isRequestingMicrophonePermission
+        && self.activeSession == nil
+        && !self.path.contains { pathState in
+          if case .interview = pathState { return true }
+          return false
+        }
+    }
   }
 
   enum Action {
@@ -31,6 +42,7 @@ struct AppFeature {
     case newConversationButtonTapped
     case newInterviewButtonTapped
     case recordPermissionResponse(Bool)
+    case interviewPermissionResponse(Bool)
     case settingsButtonTapped
     case sessionTapped(Session.ID)
     case connectivityChanged(Bool)
@@ -78,12 +90,6 @@ struct AppFeature {
         let lostIDs = state.sessions
           .filter { [.recording, .stopped, .transcribing].contains($0.state) }
           .map(\.id)
-        let interruptedInterviews = state.sessions.compactMap { session -> (Session, UUID)? in
-          guard session.state == .interviewing, let interviewID = session.interviewID else {
-            return nil
-          }
-          return (session, interviewID)
-        }
         state.$sessions.withLock { sessions in
           for id in lostIDs {
             sessions[id: id]?.state = .lost
@@ -110,20 +116,25 @@ struct AppFeature {
             }
             .map(\.id)
         )
+        // Interrupted interviews had their `interviewID` cleared above, so the artifact sweep
+        // below purges their partial answers along with any directory a crash mid-cleanup leaked.
+        let retainedInterviewIDs = Set(state.sessions.compactMap(\.interviewID))
         return .merge(
           .run { send in
             try? await self.audioStorage.purgeAllRecordings()
             for id in lostIDs {
               try? await self.transcriptVault.destroy(id)
             }
-            for (_, interviewID) in interruptedInterviews {
-              try? self.interviewArtifacts.destroy(interviewID)
-            }
             // Orphan sweep: vault files with no matching session.
             for id in await self.transcriptVault.pendingIDs() {
               if !validIDs.contains(id) || summarizedIDs.contains(id) {
                 try? await self.transcriptVault.destroy(id)
               }
+            }
+            // Orphan sweep: interview artifact directories no session references.
+            for id in self.interviewArtifacts.storedIDs()
+            where !retainedInterviewIDs.contains(id) {
+              try? self.interviewArtifacts.destroy(id)
             }
             await send(.drainQueue)
           },
@@ -136,16 +147,7 @@ struct AppFeature {
         )
 
       case .newConversationButtonTapped:
-        guard
-          !state.isRequestingMicrophonePermission,
-          state.activeSession == nil,
-          !state.path.contains(where: { pathState in
-            if case .interview = pathState { return true }
-            return false
-          })
-        else {
-          return .none
-        }
+        guard state.canStartCapture else { return .none }
         state.isRequestingMicrophonePermission = true
         return .run { send in
           let allowed = await self.audioRecorder.requestRecordPermission()
@@ -153,14 +155,7 @@ struct AppFeature {
         }
 
       case .newInterviewButtonTapped:
-        guard
-          !state.isRequestingMicrophonePermission,
-          state.activeSession == nil,
-          !state.path.contains(where: { pathState in
-            if case .interview = pathState { return true }
-            return false
-          })
-        else { return .none }
+        guard state.canStartCapture else { return .none }
         guard state.isConnected else {
           state.alert = AlertState {
             TextState("You're offline")
@@ -169,6 +164,15 @@ struct AppFeature {
           }
           return .none
         }
+        state.isRequestingMicrophonePermission = true
+        return .run { send in
+          let allowed = await self.audioRecorder.requestRecordPermission()
+          await send(.interviewPermissionResponse(allowed))
+        }
+
+      case .interviewPermissionResponse(true):
+        guard state.isRequestingMicrophonePermission else { return .none }
+        state.isRequestingMicrophonePermission = false
         let sessionID = self.uuid()
         let interviewID = self.uuid()
         let session = Session(
@@ -190,6 +194,20 @@ struct AppFeature {
         )
         return .none
 
+      case .interviewPermissionResponse(false):
+        guard state.isRequestingMicrophonePermission else { return .none }
+        state.isRequestingMicrophonePermission = false
+        let session = Session(
+          id: self.uuid(),
+          kind: .interview,
+          startDate: self.now,
+          state: .permissionDenied,
+          lossReason: "Microphone access was denied before the interview began."
+        )
+        state.$sessions.withLock { _ = $0.append(session) }
+        state.alert = self.microphoneDeniedAlert
+        return .none
+
       case .recordPermissionResponse(true):
         guard state.isRequestingMicrophonePermission else { return .none }
         state.isRequestingMicrophonePermission = false
@@ -209,14 +227,7 @@ struct AppFeature {
           lossReason: "Microphone access was denied before recording began."
         )
         state.$sessions.withLock { _ = $0.append(session) }
-        state.alert = AlertState {
-          TextState("Microphone access denied")
-        } actions: {
-          ButtonState(action: .openSystemSettings) { TextState("Open Settings") }
-          ButtonState(role: .cancel) { TextState("Not Now") }
-        } message: {
-          TextState("Enable microphone access in System Settings before starting a new session.")
-        }
+        state.alert = self.microphoneDeniedAlert
         return .none
 
       case .settingsButtonTapped:
@@ -378,13 +389,17 @@ struct AppFeature {
 
       case .path(.popFrom(let pathID)):
         guard let index = state.path.ids.firstIndex(of: pathID) else { return .none }
-        let abandonedInterviews = state.path[index...].compactMap {
-          pathState -> (Session.ID, UUID)? in
-          guard case .interview(let interview) = pathState else { return nil }
-          return (interview.sessionID, interview.interviewID)
-        }
+        // Only in-progress interviews are abandoned; a finished interview in the popped range
+        // has a saved record whose artifacts must be retained.
+        let abandonedInterviews = state.path[index...]
+          .compactMap { pathState -> (Session.ID, UUID)? in
+            guard case .interview(let interview) = pathState else { return nil }
+            return (interview.sessionID, interview.interviewID)
+          }
+          .filter { state.sessions[id: $0.0]?.state == .interviewing }
+        guard !abandonedInterviews.isEmpty else { return .none }
         state.$sessions.withLock { sessions in
-          for (id, _) in abandonedInterviews where sessions[id: id]?.state == .interviewing {
+          for (id, _) in abandonedInterviews {
             if sessions[id: id]?.kind == .interview {
               _ = sessions.remove(id: id)
             } else {
@@ -564,6 +579,17 @@ struct AppFeature {
       }
     }
     return .merge(.cancel(id: CancelID.retry), .send(.drainQueue))
+  }
+
+  private var microphoneDeniedAlert: AlertState<Action.Alert> {
+    AlertState {
+      TextState("Microphone access denied")
+    } actions: {
+      ButtonState(action: .openSystemSettings) { TextState("Open Settings") }
+      ButtonState(role: .cancel) { TextState("Not Now") }
+    } message: {
+      TextState("Enable microphone access in System Settings before starting a new session.")
+    }
   }
 
   private func startInterview(state: inout State, sessionID: Session.ID) -> Effect<Action> {
