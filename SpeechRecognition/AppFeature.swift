@@ -117,8 +117,13 @@ struct AppFeature {
             .map(\.id)
         )
         // Interrupted interviews had their `interviewID` cleared above, so the artifact sweep
-        // below purges their partial answers along with any directory a crash mid-cleanup leaked.
+        // purges their partial answers along with any directory a crash mid-cleanup leaked.
+        // The orphan set is fixed here, synchronously with that state fixup: an interview
+        // started while the cleanup effect below is still running gets a fresh ID that cannot
+        // be in this snapshot, so the sweep can never destroy a live interview's artifacts.
         let retainedInterviewIDs = Set(state.sessions.compactMap(\.interviewID))
+        let orphanedInterviewArtifactIDs = self.interviewArtifacts.storedIDs()
+          .filter { !retainedInterviewIDs.contains($0) }
         return .merge(
           .run { send in
             try? await self.audioStorage.purgeAllRecordings()
@@ -131,9 +136,8 @@ struct AppFeature {
                 try? await self.transcriptVault.destroy(id)
               }
             }
-            // Orphan sweep: interview artifact directories no session references.
-            for id in self.interviewArtifacts.storedIDs()
-            where !retainedInterviewIDs.contains(id) {
+            // Orphan sweep: interview artifact directories no session referenced at launch.
+            for id in orphanedInterviewArtifactIDs {
               try? self.interviewArtifacts.destroy(id)
             }
             await send(.drainQueue)
@@ -157,11 +161,7 @@ struct AppFeature {
       case .newInterviewButtonTapped:
         guard state.canStartCapture else { return .none }
         guard state.isConnected else {
-          state.alert = AlertState {
-            TextState("You're offline")
-          } message: {
-            TextState("The guided interview needs a connection. Try again when you're online.")
-          }
+          state.alert = self.offlineInterviewAlert
           return .none
         }
         state.isRequestingMicrophonePermission = true
@@ -173,6 +173,12 @@ struct AppFeature {
       case .interviewPermissionResponse(true):
         guard state.isRequestingMicrophonePermission else { return .none }
         state.isRequestingMicrophonePermission = false
+        // Connectivity was verified before the permission prompt, but the prompt can stay up
+        // long enough for the connection to drop; re-check before creating the session.
+        guard state.isConnected else {
+          state.alert = self.offlineInterviewAlert
+          return .none
+        }
         let sessionID = self.uuid()
         let interviewID = self.uuid()
         let session = Session(
@@ -579,6 +585,14 @@ struct AppFeature {
       }
     }
     return .merge(.cancel(id: CancelID.retry), .send(.drainQueue))
+  }
+
+  private var offlineInterviewAlert: AlertState<Action.Alert> {
+    AlertState {
+      TextState("You're offline")
+    } message: {
+      TextState("The guided interview needs a connection. Try again when you're online.")
+    }
   }
 
   private var microphoneDeniedAlert: AlertState<Action.Alert> {

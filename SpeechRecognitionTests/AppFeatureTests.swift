@@ -334,6 +334,58 @@ struct AppFeatureTests {
   }
 
   @Test
+  func interviewStartedDuringRecoveryKeepsItsArtifacts() async {
+    let orphanArtifactID = UUID(70)
+    @Shared(.sessions) var sessions: IdentifiedArrayOf<Session> = []
+    let destroyed = LockIsolated<[UUID]>([])
+    let storedArtifactIDs = LockIsolated([orphanArtifactID])
+    let (recoveryGate, recoveryContinuation) = AsyncStream.makeStream(of: Void.self)
+    var state = AppFeature.State()
+    state.isConnected = true
+    let store = TestStore(initialState: state) {
+      AppFeature()
+    } withDependencies: {
+      $0.uuid = .incrementing
+      $0.date.now = Date(timeIntervalSince1970: 100)
+      $0.audioRecorder.requestRecordPermission = { true }
+      // The recovery effect suspends here until the test opens the gate, holding the artifact
+      // sweep in flight while a new interview begins.
+      $0.audioStorage.purgeAllRecordings = {
+        for await _ in recoveryGate { break }
+      }
+      $0.transcriptVault.pendingIDs = { [] }
+      $0.interviewArtifacts.storedIDs = { storedArtifactIDs.value }
+      $0.interviewArtifacts.destroy = { id in
+        destroyed.withValue { $0.append(id) }
+      }
+      // Never yields: connectivity is exercised separately so receive order is deterministic.
+      $0.connectivity.observe = { AsyncStream { _ in } }
+    }
+    store.exhaustivity = .off
+
+    let launchTask = await store.send(.onLaunch)
+
+    // While recovery is suspended, the operator starts a standalone interview and its first
+    // artifacts land on disk.
+    await store.send(.newInterviewButtonTapped)
+    await store.receive(\.interviewPermissionResponse)
+    let activeInterviewArtifactID = UUID(1)
+    #expect(store.state.sessions[id: UUID(0)]?.interviewID == activeInterviewArtifactID)
+    storedArtifactIDs.withValue { $0.append(activeInterviewArtifactID) }
+
+    recoveryContinuation.yield(())
+    recoveryContinuation.finish()
+    await store.receive(\.drainQueue)
+
+    // The sweep destroys only directories that were orphaned at launch, never the artifacts of
+    // an interview created while it was running.
+    #expect(destroyed.value == [orphanArtifactID])
+    #expect(store.state.sessions[id: UUID(0)]?.state == .interviewing)
+
+    await launchTask.cancel()
+  }
+
+  @Test
   func discardedSessionIsRemoved() async {
     let store = TestStore(initialState: AppFeature.State()) {
       AppFeature()
@@ -474,6 +526,39 @@ struct AppFeatureTests {
     #expect(permissionRequests.value == 0)
     #expect(store.state.sessions.isEmpty)
     #expect(store.state.path.isEmpty)
+  }
+
+  @Test
+  func standaloneInterviewGrantedAfterGoingOfflineShowsAlertWithoutSession() async {
+    @Shared(.sessions) var sessions: IdentifiedArrayOf<Session> = []
+    let (permissionResponses, permissionContinuation) = AsyncStream.makeStream(of: Bool.self)
+    var state = AppFeature.State()
+    state.isConnected = true
+    let store = TestStore(initialState: state) {
+      AppFeature()
+    } withDependencies: {
+      $0.uuid = .incrementing
+      $0.date.now = Date(timeIntervalSince1970: 100)
+      $0.audioRecorder.requestRecordPermission = {
+        for await response in permissionResponses { return response }
+        return false
+      }
+    }
+    store.exhaustivity = .off
+
+    let permissionTask = await store.send(.newInterviewButtonTapped)
+    // Connectivity drops while the system permission prompt is still on screen.
+    await store.send(.connectivityChanged(false))
+    permissionContinuation.yield(true)
+    permissionContinuation.finish()
+    await store.receive(\.interviewPermissionResponse)
+
+    #expect(store.state.alert != nil)
+    #expect(!store.state.isRequestingMicrophonePermission)
+    #expect(store.state.sessions.isEmpty)
+    #expect(store.state.path.isEmpty)
+
+    await permissionTask.finish()
   }
 
   @Test
