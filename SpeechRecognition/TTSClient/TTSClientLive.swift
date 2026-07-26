@@ -59,6 +59,12 @@ private final class Delegate: NSObject, AVSpeechSynthesizerDelegate, Sendable {
     self.onDone = onDone
   }
 
+  deinit {
+    // The delegate can be released before any synthesizer callback lands (e.g. its Speaker is
+    // deallocated mid-utterance); resume the awaiting continuation instead of leaking it.
+    self.resumeOnce(completed: false)
+  }
+
   func finishCancelled() {
     self.resumeOnce(completed: false)
   }
