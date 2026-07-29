@@ -36,8 +36,33 @@ storage is device-only; there is no backend or export in v1.
 
 1. Open `SpeechRecognition.xcodeproj` and run the
    `SpeechRecognition` target (iOS 26+; the on-device engine is `SpeechAnalyzer`).
-2. In the app, open **Settings** (gear icon) and paste an Anthropic API key. It is stored in
-   the Keychain, device-only.
+2. Configure an Anthropic API key using one of these development paths:
+   * Run `swift Scripts/generate-bundled-key.swift` to securely enter a key and generate the
+     git-ignored `Config/BundledKey.private.xcconfig`. Debug builds then use the obfuscated bundled
+     key by default.
+   * Or open **Settings** (gear icon) in the app and paste a key. An operator-provided key is stored
+     in the device Keychain and overrides the bundled key.
+
+## Bundled credentials for TestFlight
+
+The shared **SpeechRecognition-TestFlight** scheme archives with the dedicated `TestFlight` build
+configuration. Both Debug and TestFlight read the same reversibly obfuscated payload from
+`Config/BundledKey.private.xcconfig`; ordinary Release/App Store builds contain no bundled payload.
+
+Generate or rotate the payload from a terminal at the repository root:
+
+```sh
+swift Scripts/generate-bundled-key.swift
+```
+
+The prompt does not echo the plaintext key, and the generated private configuration is ignored by
+Git. A TestFlight archive fails if the payload is missing or malformed; Debug builds warn and remain
+usable with a Keychain key. Obfuscation only prevents casual plaintext discovery and does not make a
+credential inside a distributed app secret.
+
+To rotate the shared key, generate a new payload, archive and upload a replacement TestFlight build,
+confirm it processes summaries successfully, and only then revoke the old key. Existing TestFlight
+builds retain the old embedded credential and stop working as soon as that key is revoked.
 
 Remote features depend only on the provider-neutral `ConversationServiceClient`. The current live
 implementation is a temporary BYOK adapter that calls Anthropic directly. It is retained to keep
