@@ -1,4 +1,5 @@
 import ComposableArchitecture
+import Foundation
 import SwiftUI
 
 @Reducer
@@ -6,8 +7,31 @@ struct Settings {
   @ObservableState
   struct State: Equatable {
     var apiKey = ""
+    var credentialSource = CredentialSource.missing
     var didSave = false
     var errorMessage: String?
+  }
+
+  enum CredentialSource: Equatable {
+    case operatorKey
+    case bundled
+    case missing
+
+    var title: String {
+      switch self {
+      case .operatorKey: "Operator key"
+      case .bundled: "Bundled test key"
+      case .missing: "Missing"
+      }
+    }
+
+    var systemImage: String {
+      switch self {
+      case .operatorKey: "key.fill"
+      case .bundled: "shippingbox.fill"
+      case .missing: "exclamationmark.triangle.fill"
+      }
+    }
   }
 
   enum Action: BindableAction {
@@ -29,12 +53,18 @@ struct Settings {
         return .none
 
       case .onAppear:
-        state.apiKey = (try? self.apiKeyClient.load()) ?? ""
+        let operatorKey = normalizedAPIKey((try? self.apiKeyClient.load()) ?? nil)
+        let bundledKey = normalizedAPIKey(self.apiKeyClient.loadBundled())
+        state.apiKey = operatorKey ?? ""
+        state.credentialSource = operatorKey != nil ? .operatorKey : bundledKey != nil ? .bundled : .missing
         return .none
 
       case .saveTapped:
+        guard let key = normalizedAPIKey(state.apiKey) else { return .none }
         do {
-          try self.apiKeyClient.save(state.apiKey)
+          try self.apiKeyClient.save(key)
+          state.apiKey = key
+          state.credentialSource = .operatorKey
           state.didSave = true
         } catch {
           state.didSave = false
@@ -46,6 +76,8 @@ struct Settings {
         do {
           try self.apiKeyClient.delete()
           state.apiKey = ""
+          state.credentialSource = normalizedAPIKey(self.apiKeyClient.loadBundled()) == nil
+            ? .missing : .bundled
           state.didSave = false
         } catch {
           state.errorMessage = "The API key could not be removed."
@@ -62,6 +94,11 @@ struct SettingsView: View {
   var body: some View {
     AuroraScreen {
       Form {
+        Section("Active Credential") {
+          Label(store.credentialSource.title, systemImage: store.credentialSource.systemImage)
+            .foregroundStyle(store.credentialSource == .missing ? .orange : .primary)
+        }
+
         Section {
           SecureField("sk-ant-…", text: $store.apiKey)
             .textInputAutocapitalization(.never)
@@ -70,7 +107,7 @@ struct SettingsView: View {
           Text("Anthropic API Key")
         } footer: {
           Text(
-            "Used for conversation summaries and guided interviews. Stored in the Keychain on this device only."
+            "Used for conversation summaries and guided interviews. A saved operator key is stored in this device's Keychain and overrides any bundled test key."
           )
         }
 
@@ -78,7 +115,7 @@ struct SettingsView: View {
           Button("Save") {
             store.send(.saveTapped)
           }
-          .disabled(store.apiKey.isEmpty)
+          .disabled(normalizedAPIKey(store.apiKey) == nil)
           if store.didSave {
             Label("Saved", systemImage: "checkmark.circle.fill")
               .foregroundStyle(.green)
@@ -86,9 +123,10 @@ struct SettingsView: View {
           if let errorMessage = store.errorMessage {
             Text(errorMessage).foregroundStyle(.red)
           }
-          Button("Remove Key", role: .destructive) {
+          Button("Remove Operator Key", role: .destructive) {
             store.send(.deleteTapped)
           }
+          .disabled(store.credentialSource != .operatorKey)
         }
       }
       .scrollContentBackground(.hidden)

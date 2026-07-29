@@ -8,6 +8,7 @@ import Security
 @DependencyClient
 struct APIKeyClient: Sendable {
   var load: @Sendable () throws -> String?
+  var loadBundled: @Sendable () -> String?
   var save: @Sendable (_ key: String) throws -> Void
   var delete: @Sendable () throws -> Void
 }
@@ -21,6 +22,7 @@ extension APIKeyClient: TestDependencyKey {
     let stored = LockIsolated<String?>("sk-ant-preview")
     return Self(
       load: { stored.value },
+      loadBundled: { nil },
       save: { stored.setValue($0) },
       delete: { stored.setValue(nil) }
     )
@@ -55,6 +57,9 @@ extension APIKeyClient: DependencyKey {
           throw KeychainError(status: status)
         }
       },
+      loadBundled: {
+        BundledAPIKey.load()
+      },
       save: { key in
         let data = Data(key.utf8)
         var query = baseQuery()
@@ -82,6 +87,21 @@ extension APIKeyClient: DependencyKey {
       }
     )
   }
+}
+
+extension APIKeyClient {
+  /// Returns an operator-provided Keychain credential when present, otherwise the credential
+  /// bundled into Debug/TestFlight builds. The bundled value is never copied into Keychain.
+  func resolvedKey() -> String? {
+    let operatorKey = normalizedAPIKey((try? self.load()) ?? nil)
+    return operatorKey ?? normalizedAPIKey(self.loadBundled())
+  }
+}
+
+func normalizedAPIKey(_ value: String?) -> String? {
+  guard let value else { return nil }
+  let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+  return trimmed.isEmpty ? nil : trimmed
 }
 
 extension DependencyValues {

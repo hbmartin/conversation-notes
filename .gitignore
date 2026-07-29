@@ -1,3 +1,4 @@
 **/xcuserdata/
 **/*.xcuserstate
 reviews_triage/
+/Config/BundledKey.private.xcconfig
