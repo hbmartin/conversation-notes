@@ -14,12 +14,14 @@ struct Settings {
 
   enum CredentialSource: Equatable {
     case operatorKey
+    case operatorKeyUnavailable
     case bundled
     case missing
 
     var title: String {
       switch self {
       case .operatorKey: "Operator key"
+      case .operatorKeyUnavailable: "Operator key unavailable"
       case .bundled: "Bundled test key"
       case .missing: "Missing"
       }
@@ -28,9 +30,14 @@ struct Settings {
     var systemImage: String {
       switch self {
       case .operatorKey: "key.fill"
+      case .operatorKeyUnavailable: "exclamationmark.lock.fill"
       case .bundled: "shippingbox.fill"
       case .missing: "exclamationmark.triangle.fill"
       }
+    }
+
+    var canRemoveOperatorKey: Bool {
+      self == .operatorKey || self == .operatorKeyUnavailable
     }
   }
 
@@ -53,10 +60,18 @@ struct Settings {
         return .none
 
       case .onAppear:
-        let operatorKey = normalizedAPIKey((try? self.apiKeyClient.load()) ?? nil)
-        let bundledKey = normalizedAPIKey(self.apiKeyClient.loadBundled())
-        state.apiKey = operatorKey ?? ""
-        state.credentialSource = operatorKey != nil ? .operatorKey : bundledKey != nil ? .bundled : .missing
+        state.errorMessage = nil
+        do {
+          let operatorKey = normalizedAPIKey(try self.apiKeyClient.load())
+          let bundledKey = normalizedAPIKey(self.apiKeyClient.loadBundled())
+          state.apiKey = operatorKey ?? ""
+          state.credentialSource = operatorKey != nil
+            ? .operatorKey : bundledKey != nil ? .bundled : .missing
+        } catch {
+          state.apiKey = ""
+          state.credentialSource = .operatorKeyUnavailable
+          state.errorMessage = "The operator key could not be read."
+        }
         return .none
 
       case .saveTapped:
@@ -66,6 +81,7 @@ struct Settings {
           state.apiKey = key
           state.credentialSource = .operatorKey
           state.didSave = true
+          state.errorMessage = nil
         } catch {
           state.didSave = false
           state.errorMessage = "The API key could not be saved."
@@ -79,6 +95,7 @@ struct Settings {
           state.credentialSource = normalizedAPIKey(self.apiKeyClient.loadBundled()) == nil
             ? .missing : .bundled
           state.didSave = false
+          state.errorMessage = nil
         } catch {
           state.errorMessage = "The API key could not be removed."
         }
@@ -126,7 +143,7 @@ struct SettingsView: View {
           Button("Remove Operator Key", role: .destructive) {
             store.send(.deleteTapped)
           }
-          .disabled(store.credentialSource != .operatorKey)
+          .disabled(!store.credentialSource.canRemoveOperatorKey)
         }
       }
       .scrollContentBackground(.hidden)

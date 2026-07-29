@@ -8,15 +8,11 @@ payload="${BUNDLED_ANTHROPIC_API_KEY_PAYLOAD:-}"
 payload_error=""
 if [[ -z "$payload" ]]; then
   payload_error="the bundled Anthropic key payload is missing"
-else
-  IFS='.' read -r version mask ciphertext extra <<< "$payload"
-  if [[ "$version" != "v1" || -n "${extra:-}" ]]; then
-    payload_error="the bundled Anthropic key payload has an unsupported format"
-  elif [[ -z "$mask" || -z "$ciphertext" ]]; then
-    payload_error="the bundled Anthropic key payload is empty"
-  elif [[ ! "$mask" =~ ^[[:xdigit:]]+$ || ! "$ciphertext" =~ ^[[:xdigit:]]+$ ]]; then
-    payload_error="the bundled Anthropic key payload contains invalid hex"
-  elif (( ${#mask} % 2 != 0 || ${#ciphertext} % 2 != 0 )); then
+elif [[ "$payload" =~ ^v1\.([[:xdigit:]]+)\.([[:xdigit:]]+)$ ]]; then
+  mask="${BASH_REMATCH[1]}"
+  ciphertext="${BASH_REMATCH[2]}"
+
+  if (( ${#mask} % 2 != 0 || ${#ciphertext} % 2 != 0 )); then
     payload_error="the bundled Anthropic key payload contains incomplete bytes"
   elif [[ ${#mask} -ne ${#ciphertext} ]]; then
     payload_error="the bundled Anthropic key mask and ciphertext lengths differ"
@@ -38,6 +34,8 @@ else
       payload_error="the bundled Anthropic key payload does not decode to an Anthropic API key"
     fi
   fi
+else
+  payload_error="the bundled Anthropic key payload has an unsupported format"
 fi
 
 case "$configuration" in
@@ -55,6 +53,12 @@ case "$configuration" in
   Release)
     if [[ -n "$payload" ]]; then
       echo "error: Release/App Store builds must not contain a bundled Anthropic key payload."
+      exit 1
+    fi
+    ;;
+  *)
+    if [[ -n "$payload" ]]; then
+      echo "error: Build configuration '$configuration' must not contain a bundled Anthropic key payload."
       exit 1
     fi
     ;;

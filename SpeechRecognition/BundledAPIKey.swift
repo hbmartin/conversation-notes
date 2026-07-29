@@ -5,25 +5,35 @@ enum BundledAPIKey {
 
   static func load() -> String? {
     #if DEBUG || TESTFLIGHT
-      guard
-        let payload = Bundle.main.object(forInfoDictionaryKey: self.infoDictionaryKey) as? String
-      else { return nil }
-      return normalizedAPIKey(BundledAPIKeyPayload.decode(payload))
+      self.load(from: Bundle.main.infoDictionary ?? [:])
     #else
       return nil
     #endif
   }
+
+  #if DEBUG || TESTFLIGHT
+    static func load(from infoDictionary: [String: Any]) -> String? {
+      guard
+        let payload = infoDictionary[self.infoDictionaryKey] as? String,
+        let decoded = BundledAPIKeyPayload.decode(payload)
+      else { return nil }
+      let trimmed = decoded.trimmingCharacters(in: .whitespacesAndNewlines)
+      return trimmed.isEmpty ? nil : trimmed
+    }
+  #endif
 }
 
 enum BundledAPIKeyPayload {
   enum EncodingError: Error, Equatable {
     case emptyKey
+    case invalidKey
     case maskLengthMismatch
   }
 
   static func encode(_ key: String, mask: [UInt8]) throws -> String {
     let keyBytes = Array(key.utf8)
     guard !keyBytes.isEmpty else { throw EncodingError.emptyKey }
+    guard self.isValidKey(keyBytes) else { throw EncodingError.invalidKey }
     guard mask.count == keyBytes.count else { throw EncodingError.maskLengthMismatch }
 
     let ciphertext = zip(keyBytes, mask).map { $0.0 ^ $0.1 }
@@ -42,7 +52,13 @@ enum BundledAPIKeyPayload {
     else { return nil }
 
     let plaintext = zip(ciphertext, mask).map { $0.0 ^ $0.1 }
-    return String(bytes: plaintext, encoding: .utf8)
+    guard self.isValidKey(plaintext) else { return nil }
+    return String(bytes: plaintext, encoding: .ascii)
+  }
+
+  private static func isValidKey(_ bytes: [UInt8]) -> Bool {
+    bytes.starts(with: Array("sk-ant-".utf8))
+      && bytes.allSatisfy { (33...126).contains($0) }
   }
 
   private static func hex(_ bytes: [UInt8]) -> String {

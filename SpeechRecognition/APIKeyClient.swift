@@ -91,9 +91,10 @@ extension APIKeyClient: DependencyKey {
 
 extension APIKeyClient {
   /// Returns an operator-provided Keychain credential when present, otherwise the credential
-  /// bundled into Debug/TestFlight builds. The bundled value is never copied into Keychain.
-  func resolvedKey() -> String? {
-    let operatorKey = normalizedAPIKey((try? self.load()) ?? nil)
+  /// bundled into Debug/TestFlight builds. A Keychain read failure is propagated rather than
+  /// silently changing credential sources. The bundled value is never copied into Keychain.
+  func resolvedKey() throws -> String? {
+    let operatorKey = normalizedAPIKey(try self.load())
     return operatorKey ?? normalizedAPIKey(self.loadBundled())
   }
 }

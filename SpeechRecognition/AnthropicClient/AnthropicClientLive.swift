@@ -7,7 +7,7 @@ extension AnthropicClient: DependencyKey {
       _ body: MessagesRequest, timeout: TimeInterval
     ) async throws -> MessagesResponse {
       @Dependency(\.apiKeyClient) var apiKeyClient
-      guard let key = apiKeyClient.resolvedKey() else {
+      guard let key = try apiKeyClient.resolvedKey() else {
         throw AnthropicClientError.missingAPIKey
       }
       var request = URLRequest(url: URL(string: "https://api.anthropic.com/v1/messages")!)
