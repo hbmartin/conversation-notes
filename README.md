@@ -49,16 +49,24 @@ The shared **SpeechRecognition-TestFlight** scheme archives with the dedicated `
 configuration. Both Debug and TestFlight read the same reversibly obfuscated payload from
 `Config/BundledKey.private.xcconfig`; ordinary Release/App Store builds contain no bundled payload.
 
+Before distributing a build, create a dedicated credential used only by this prototype. Apply spend
+and rate limits at the narrowest provider account or workspace scope available, enable usage alerts,
+and keep its revocation separate from personal and production credentials. Every TestFlight tester
+can recover the bundled credential, so these operational controls—not obfuscation—bound its risk.
+
 Generate or rotate the payload from a terminal at the repository root:
 
 ```sh
 swift Scripts/generate-bundled-key.swift
 ```
 
-The prompt does not echo the plaintext key, and the generated private configuration is ignored by
-Git. A TestFlight archive fails if the payload is missing or malformed; Debug builds warn and remain
-usable with a Keychain key. Obfuscation only prevents casual plaintext discovery and does not make a
-credential inside a distributed app secret.
+The prompt does not echo the plaintext key. The generated private configuration is ignored by Git
+and written with owner-only permissions. A TestFlight archive fails if the payload is missing or
+malformed; Debug builds warn and remain usable with a Keychain key. Obfuscation only prevents casual
+plaintext discovery and does not make a credential inside a distributed app secret.
+
+Run `Scripts/test-bundled-key-format.sh` after changing the payload format. Its golden vectors must
+be accepted consistently by the generator, runtime decoder, and build validator.
 
 To rotate the shared key, generate a new payload, archive and upload a replacement TestFlight build,
 confirm it processes summaries successfully, and only then revoke the old key. Existing TestFlight
