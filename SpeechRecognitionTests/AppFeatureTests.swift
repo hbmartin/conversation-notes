@@ -291,6 +291,7 @@ struct AppFeatureTests {
       }
       // Never yields: connectivity is exercised separately so receive order is deterministic.
       $0.connectivity.observe = { AsyncStream { _ in } }
+      $0.launchMetrics.start = {}
     }
 
     let lossReason =
@@ -360,6 +361,7 @@ struct AppFeatureTests {
       }
       // Never yields: connectivity is exercised separately so receive order is deterministic.
       $0.connectivity.observe = { AsyncStream { _ in } }
+      $0.launchMetrics.start = {}
     }
     store.exhaustivity = .off
 

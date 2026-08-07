@@ -73,6 +73,7 @@ struct AppFeature {
   @Dependency(\.connectivity) var connectivity
   @Dependency(\.conversationService) var conversationService
   @Dependency(\.interviewArtifacts) var interviewArtifacts
+  @Dependency(\.launchMetrics) var launchMetrics
   @Dependency(\.continuousClock) var clock
   @Dependency(\.openURL) var openURL
   @Dependency(\.uuid) var uuid
@@ -158,7 +159,13 @@ struct AppFeature {
               await send(.connectivityChanged(connected))
             }
           }
-          .cancellable(id: CancelID.connectivity)
+          .cancellable(id: CancelID.connectivity),
+          // Off the main actor and dispatching no action: this is a launch-cost instrument, so it
+          // must not become launch cost. MetricKit reports on runs that already finished, and its
+          // payloads arrive at most once a day, so nothing is lost by subscribing a beat late.
+          .run { _ in
+            self.launchMetrics.start()
+          }
         )
 
       case .newConversationButtonTapped:

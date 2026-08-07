@@ -134,7 +134,8 @@ version.
    `dlopen` storm that dominates the main thread. On hardware, expect page-in and first-run Metal
    shader compilation (MeshGradient, Liquid Glass, `.regularMaterial`) to matter more and
    `_accessibilityInit` to matter less. Use the Instruments **App Launch** template on a release
-   build, and add `MetricKit` (`MXAppLaunchMetric`) if you want field data.
+   build. MetricKit is now wired up (see [Field measurement](#field-measurement)) and will answer
+   this on its own once a TestFlight build has been in someone's hands for a day.
 
 2. **Re-check the first-frame render cost on device.** 17% of main-thread startup was
    `_UIHostingView.layoutSubviews` on the first CA commit — the aurora mesh, the glass container,
@@ -175,6 +176,7 @@ counted, report on things that must be timed.**
 | Launch colour matches the mesh; plist names it | `LaunchScreenTests` | colorset drift when the palette is edited |
 | Static initializers, non-lazy classes, dylibs, embedded frameworks | `Scripts/check-launch-budget.sh` | pre-main work: `+load`, C++ static ctors, a new dynamic framework |
 | The launch screen actually paints the aurora | `Scripts/check-launch-continuity.sh` | the white flash returning for a reason the unit tests cannot see |
+| Quantile reporting over MetricKit histograms | `LaunchMetricsTests` | field numbers being misread — empty histograms, tail buckets, boundaries |
 
 None of these time anything, so none of them flake. `check-launch-budget.sh` must run against a
 Release build — Debug links a stub through `SpeechRecognition.debug.dylib` and every count would
@@ -213,21 +215,64 @@ CONT=$(xcrun simctl get_app_container booted me.haroldmartin.speechrecognition d
 # write N sessions to "$CONT/Library/Application Support/MSLCapture/sessions.json"
 ```
 
-### Not built yet
+### Field measurement
 
-Three things would give real numbers rather than proxies, and all three change the shipping app,
-so they are followups rather than done work:
+Everything above measures a Simulator. `LaunchMetricsClient` measures real hardware: `onLaunch`
+subscribes to MetricKit, and once a day the system hands back histograms describing runs that
+already finished. This is the only instrument that can answer followup 1, because the distortion
+it exists to correct for — `dyld_sim`, the accessibility `dlopen` storm — is invisible from inside
+the Simulator.
+
+Four histograms are logged per payload:
+
+| Histogram | What it means |
+| --- | --- |
+| `timeToFirstDraw` | process start to the first CA commit finishing — the headline number |
+| `optimizedTimeToFirstDraw` | the same, for launches the system pre-warmed; kept separate so it cannot flatter the headline |
+| `extendedLaunch` | past the first frame, through to interactive |
+| `resume` | returning from the background |
+
+Read them with the app running on a connected device:
+
+```sh
+log stream --predicate 'subsystem == "me.haroldmartin.speechrecognition"
+  AND category == "launch-metrics"' --style compact
+```
+
+```
+launch 2026-08-06 v1.0 timeToFirstDraw: n=214  p50 700–800ms  p90 1400–1600ms  max <2500ms
+```
+
+Quantiles are reported as the bucket they fall in, never as a point. MetricKit's launch buckets
+run hundreds of milliseconds wide, so `p50 = 843ms` would be precision that does not exist.
+
+The subscriber also logs `MXAppLaunchDiagnostic` and `MXHangDiagnostic` at `error` level. Those
+are the ones worth watching: the system raises a launch diagnostic when a launch crossed *its own*
+slow threshold, which is the closest thing to a field alarm for the complaint that started this
+document. The call stack that comes with it is in Xcode Organizer rather than the log, where it is
+readable.
+
+**Nothing is transmitted and nothing is written to disk.** Payloads are summarised into the
+unified log and dropped. MetricKit reports aggregate durations and call stacks — it has no access
+to anything the operator recorded — but the client is deliberately the only place that would have
+to change if these summaries ever needed to go somewhere, so that decision stays in one file.
+
+Payloads arrive at most once a day, which makes the path awkward to exercise. Xcode's
+**Debug → Simulate MetricKit Payloads** delivers a synthetic one immediately while the app is
+running from Xcode. Note that the subscription itself measured free: interleaved before/after
+runs put the median at 1.79s and 1.80s, inside a 0.05s run-to-run spread.
+
+### Not built yet
 
 - **`OSSignposter` intervals** around `State.init`, the sessions decode, and the recovery sweep,
   exported in CI with `xctrace export --xpath` over the `os-signpost` table. This turns the
   hand-rolled `sample` breakdown above into a repeatable artifact that attributes a regression to
-  a phase instead of just reporting a larger total.
+  a phase instead of reporting a larger total.
 - **`mxSignpost` instead of plain `os_signpost`** for those same probes, so the intervals come
-  back from TestFlight builds in MetricKit payloads — one set of probes, local traces and field
-  data both.
-- **`MXAppLaunchMetric.histogrammedTimeToFirstDraw`**, which is the only thing that will answer
-  followup 1. A 24-hour-delayed histogram is a trend instrument, not a gate.
+  back from TestFlight builds in the MetricKit payloads already being received here — one set of
+  probes, local traces and field data both. `MXMetricManager.makeLogHandle(category:)` is the
+  entry point, and `LaunchMetricsSubscriber` already handles the payloads they would arrive in.
 
-`XCTApplicationLaunchMetric` is the official answer and is genuinely useful locally for a
-before/after, but it needs a UI test target this project does not have, and its baselines are
+`XCTApplicationLaunchMetric` is the official answer for a local before/after and is genuinely
+useful as one, but it needs a UI test target this project does not have, and its baselines are
 stored per device configuration, which is painful to keep green across CI runner images.

@@ -141,6 +141,20 @@ Scripts/measure-launch.sh            # median launch CPU time and its spread —
 The first two are deterministic and safe to gate on. The third is not: run-to-run variance is
 around 6% on a quiet machine, so read any delta against the spread it prints.
 
+All three measure the Simulator. `LaunchMetricsClient` measures real hardware — it subscribes to
+MetricKit at launch and summarises the launch histograms and slow-launch diagnostics into the
+unified log:
+
+```sh
+log stream --predicate 'subsystem == "me.haroldmartin.speechrecognition"
+  AND category == "launch-metrics"' --style compact
+```
+
+Nothing is transmitted and nothing is written to disk. MetricKit reports aggregate durations and
+call stacks with no access to captured content, and the payloads are summarised into the log and
+dropped. That client is the only file that would change if the summaries ever needed to leave the
+device.
+
 ## v1 limitations (by design)
 
 * Interrupted recordings (phone call, OS kill, reboot) are lost and the operator is informed —

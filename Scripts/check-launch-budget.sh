@@ -30,7 +30,12 @@ readonly MAX_NON_LAZY_CLASSES=1
 
 # Every linked dylib is a load command dyld resolves at launch. The Swift runtime libraries
 # dominate this list and are unavoidable; new *framework* imports are the ones to notice.
-readonly MAX_LINKED_DYLIBS=39
+#
+# Raised 39 → 41 for MetricKit.framework and libswiftMetricKit.dylib, which LaunchMetricsClient
+# needs. Both come out of the shared cache, and an interleaved before/after put launch at 1.79s
+# against 1.80s — inside a 0.05s spread. That buys the only measurements this project has from
+# real hardware; see the Field measurement section of docs/launch-performance.md.
+readonly MAX_LINKED_DYLIBS=41
 
 # Embedded dynamic frameworks are dlopen'd from the bundle at launch, off the shared cache, and
 # are the single most expensive thing on this list. The app ships zero.

@@ -27,9 +27,10 @@ struct LaunchWorkTests {
       Session(id: UUID(0), startDate: Date(timeIntervalSince1970: 0), state: .saved)
     ]
     let recorded = LockIsolated<[String]>([])
+    let metricsSubscriptions = LockIsolated(0)
     // `NWPathMonitor` does not report for tens of milliseconds, so recovery always finishes
     // first. Driving the stream by hand keeps that real ordering deterministic here instead of
-    // racing the two effects `onLaunch` merges.
+    // racing the effects `onLaunch` merges.
     let (connectivity, connectivityContinuation) = AsyncStream.makeStream(of: Bool.self)
     let store = TestStore(initialState: AppFeature.State()) {
       CombineReducers {
@@ -45,6 +46,7 @@ struct LaunchWorkTests {
       $0.transcriptVault.pendingIDs = { [] }
       $0.interviewArtifacts.storedIDs = { [] }
       $0.connectivity.observe = { connectivity }
+      $0.launchMetrics.start = { metricsSubscriptions.withValue { $0 += 1 } }
     }
 
     let task = await store.send(.onLaunch)
@@ -62,6 +64,9 @@ struct LaunchWorkTests {
         "drainQueue",
       ]
     )
+    // Subscribing to MetricKit dispatches no action, which is why it is asserted here rather than
+    // showing up in the sequence above — and it happens once, not once per launch effect.
+    #expect(metricsSubscriptions.value == 1)
   }
 
   /// `State.init` runs on the main thread before the first frame, so whatever it touches is
