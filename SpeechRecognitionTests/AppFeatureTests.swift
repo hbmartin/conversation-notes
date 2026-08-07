@@ -309,7 +309,7 @@ struct AppFeatureTests {
         $0[id: standaloneInterviewingID]?.interviewID = nil
       }
     }
-    await store.receive(\.drainQueue)
+    await store.receive(\.launchRecoveryCompleted)
 
     #expect(events.value.contains("audio.purgeAll"))
     // In-flight sessions' vault entries are defensively destroyed; the orphan is swept; the
@@ -375,7 +375,7 @@ struct AppFeatureTests {
 
     recoveryContinuation.yield(())
     recoveryContinuation.finish()
-    await store.receive(\.drainQueue)
+    await store.receive(\.launchRecoveryCompleted)
 
     // The sweep destroys only directories that were orphaned at launch, never the artifacts of
     // an interview created while it was running.

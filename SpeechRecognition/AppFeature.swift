@@ -53,6 +53,7 @@ struct AppFeature {
     case settingsButtonTapped
     case sessionTapped(Session.ID)
     case connectivityChanged(Bool)
+    case launchRecoveryCompleted
     case drainQueue
     case retryTimerFired(Session.ID, Date)
     case summarizationResponse(Session.ID, Result<SummaryResponse, any Error>)
@@ -128,6 +129,9 @@ struct AppFeature {
         // The orphan set is fixed here, synchronously with that state fixup: an interview
         // started while the cleanup effect below is still running gets a fresh ID that cannot
         // be in this snapshot, so the sweep can never destroy a live interview's artifacts.
+        // That ordering is the reason this directory listing stays on the main actor despite
+        // being disk I/O: deferring it into the effect would widen the window it closes, which
+        // `interviewStartedDuringRecoveryKeepsItsArtifacts` exists to prevent.
         let retainedInterviewIDs = Set(state.sessions.compactMap(\.interviewID))
         let orphanedInterviewArtifactIDs = self.interviewArtifacts.storedIDs()
           .filter { !retainedInterviewIDs.contains($0) }
@@ -147,7 +151,7 @@ struct AppFeature {
             for id in orphanedInterviewArtifactIDs {
               try? self.interviewArtifacts.destroy(id)
             }
-            await send(.drainQueue)
+            await send(.launchRecoveryCompleted)
           },
           .run { send in
             for await connected in self.connectivity.observe() {
@@ -259,6 +263,15 @@ struct AppFeature {
           return .merge(.cancel(id: CancelID.retry), .send(.drainQueue))
         }
         return connected ? .none : .cancel(id: CancelID.retry)
+
+      case .launchRecoveryCompleted:
+        // Recovery is finished and disk state has settled, so take one look at the queue. This
+        // drains inline rather than sending `.drainQueue`: at launch `isConnected` is still
+        // `false` until `NWPathMonitor` reports (tens of milliseconds later), so a separate
+        // action here would be a guaranteed no-op — `connectivityChanged` drives the first real
+        // drain. Recovery itself never produces a summarizable session, so nothing is lost when
+        // this finds none.
+        return self.drainQueue(state: &state)
 
       case .drainQueue:
         return self.drainQueue(state: &state)
@@ -670,6 +683,9 @@ struct AppView: View {
       ActiveSessionView(store: store)
     }
     .alert($store.scope(\.alert, action: \.alert))
+    // `.finish()` never returns: `onLaunch` merges the connectivity observation, whose stream runs
+    // for as long as the app does. That is the point — awaiting it here ties the monitor's
+    // lifetime to this view's, so it is torn down with the root rather than outliving it.
     .task {
       await store.send(.onLaunch).finish()
     }
