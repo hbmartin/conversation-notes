@@ -24,6 +24,13 @@ struct AppFeature {
     var isRequestingMicrophonePermission = false
     /// Only concurrency is transient; retry eligibility and timing live on each persisted session.
     var summarizationInFlightID: Session.ID?
+    /// Build-time gate; resolved once at launch so the home screen renders correctly on first pass.
+    var isConversationCaptureEnabled: Bool
+
+    init() {
+      @Dependency(\.featureFlags) var featureFlags
+      self.isConversationCaptureEnabled = featureFlags.isConversationCaptureEnabled()
+    }
 
     /// A new capture cannot begin while another microphone workflow — a pending permission
     /// prompt, an active recording, or an interview — is underway.
@@ -151,7 +158,7 @@ struct AppFeature {
         )
 
       case .newConversationButtonTapped:
-        guard state.canStartCapture else { return .none }
+        guard state.isConversationCaptureEnabled, state.canStartCapture else { return .none }
         state.isRequestingMicrophonePermission = true
         return .run { send in
           let allowed = await self.audioRecorder.requestRecordPermission()

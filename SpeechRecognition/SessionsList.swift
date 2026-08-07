@@ -21,7 +21,6 @@ struct SessionsListView: View {
       }
       .scrollIndicators(.hidden)
     }
-    .navigationTitle("MSL Capture")
     .navigationBarTitleDisplayMode(.inline)
     .toolbarBackground(.hidden, for: .navigationBar)
     .toolbar {
@@ -40,10 +39,14 @@ struct SessionsListView: View {
     VStack(alignment: .leading, spacing: 10) {
       Text("Capture your next interaction")
         .font(.system(.largeTitle, design: .rounded, weight: .bold))
-      Text("Record an HCP conversation or begin a guided voice debrief—each whenever you need it.")
-        .font(.title3)
-        .foregroundStyle(.secondary)
-        .fixedSize(horizontal: false, vertical: true)
+      Text(
+        store.isConversationCaptureEnabled
+          ? "Record an HCP conversation or begin a guided voice debrief—each whenever you need it."
+          : "Begin a guided voice debrief whenever you need it."
+      )
+      .font(.title3)
+      .foregroundStyle(.secondary)
+      .fixedSize(horizontal: false, vertical: true)
     }
     .accessibilityElement(children: .combine)
   }
@@ -51,7 +54,9 @@ struct SessionsListView: View {
   @ViewBuilder
   private var captureActions: some View {
     GlassEffectContainer(spacing: 18) {
-      if self.horizontalSizeClass == .regular {
+      if !store.isConversationCaptureEnabled {
+        interviewButton
+      } else if self.horizontalSizeClass == .regular {
         HStack(spacing: 18) {
           conversationButton
           interviewButton
@@ -112,9 +117,13 @@ struct SessionsListView: View {
             .foregroundStyle(AppTheme.conversation)
           Text("Your captured interactions will appear here.")
             .font(.headline)
-          Text("Choose either action above to begin.")
-            .font(.subheadline)
-            .foregroundStyle(.secondary)
+          Text(
+            store.isConversationCaptureEnabled
+              ? "Choose either action above to begin."
+              : "Choose the action above to begin."
+          )
+          .font(.subheadline)
+          .foregroundStyle(.secondary)
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 38)

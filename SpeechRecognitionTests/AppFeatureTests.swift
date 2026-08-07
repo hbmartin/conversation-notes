@@ -449,6 +449,51 @@ struct AppFeatureTests {
   }
 
   @Test
+  func disabledConversationCaptureBlocksRecordingButNotInterviews() async {
+    @Shared(.sessions) var sessions: IdentifiedArrayOf<Session> = []
+    let permissionRequests = LockIsolated(0)
+    // State resolves the flag in its initializer, so it must be built inside the dependency
+    // context — `TestStore(initialState:)` evaluates its argument outside `withDependencies:`.
+    var state = withDependencies {
+      $0.featureFlags.isConversationCaptureEnabled = { false }
+    } operation: {
+      AppFeature.State()
+    }
+    state.isConnected = true
+    #expect(!state.isConversationCaptureEnabled)
+
+    let store = TestStore(initialState: state) {
+      AppFeature()
+    } withDependencies: {
+      $0.featureFlags.isConversationCaptureEnabled = { false }
+      $0.uuid = .incrementing
+      $0.date.now = Date(timeIntervalSince1970: 100)
+      $0.audioRecorder.requestRecordPermission = {
+        permissionRequests.withValue { $0 += 1 }
+        return true
+      }
+    }
+
+    // No state change, no permission prompt, no session.
+    await store.send(.newConversationButtonTapped)
+    #expect(permissionRequests.value == 0)
+    #expect(store.state.activeSession == nil)
+    #expect(store.state.sessions.isEmpty)
+
+    store.exhaustivity = .off
+    await store.send(.newInterviewButtonTapped) {
+      $0.isRequestingMicrophonePermission = true
+    }
+    await store.receive(\.interviewPermissionResponse) {
+      $0.isRequestingMicrophonePermission = false
+    }
+    #expect(permissionRequests.value == 1)
+    #expect(store.state.sessions.count == 1)
+    #expect(store.state.sessions[0].kind == .interview)
+    #expect(store.state.path.count == 1)
+  }
+
+  @Test
   func standaloneInterviewPermissionDenialRecordsDeniedSession() async {
     @Shared(.sessions) var sessions: IdentifiedArrayOf<Session> = []
     var state = AppFeature.State()

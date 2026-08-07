@@ -2,3 +2,4 @@
 **/*.xcuserstate
 reviews_triage/
 /Config/BundledKey.private.xcconfig
+triage_decisions.db

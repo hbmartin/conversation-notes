@@ -80,6 +80,52 @@ credentials, prompt/model versions, rate and cost policy, audit correlation, rev
 retention enforcement. Reducers and persisted domain models do not expose Anthropic request types,
 so that replacement does not require feature changes.
 
+## Feature flags
+
+Conversation capture (the **Record Conversation** home-screen action and everything downstream of
+it) is gated by the `CONVERSATION_CAPTURE_ENABLED` build setting. It travels the same path as the
+bundled credential — build setting → `Info.plist` (`ConversationCaptureEnabled`) →
+`Bundle.main.infoDictionary` → `FeatureFlagsClient` — and is resolved once when `AppFeature.State`
+is created.
+
+| Configuration | `CONVERSATION_CAPTURE_ENABLED` | Home screen |
+|---|---|---|
+| Debug | `YES` | Record Conversation + Start Interview |
+| TestFlight | `NO` | Start Interview only |
+| Release | `NO` | Start Interview only |
+
+TestFlight and App Store builds therefore ship the guided interview only. The values live in the
+app target's per-configuration build settings, not in `Config/BundledKey.xcconfig`, because that
+xcconfig is the shared base for both Debug and TestFlight.
+
+The flag fails closed: a missing, unsubstituted, or unrecognized value disables conversation
+capture, so a build-setting typo can never ship the feature by accident.
+
+Disabling the flag only removes the *entry point* — it does not amputate the pipeline. Sessions
+captured by an earlier build still appear in Recent Activity, still finish transcribing and
+summarizing through the queue, and are still swept by launch recovery; otherwise staged audio and
+queued transcripts would be stranded on disk.
+
+## App icons
+
+Settings offers four icons — *Woven iris* (the primary icon), *Thread aperture*, *Braided bloom*,
+and *Woven iris, inverted* — switched through `AppIconClient` /
+`UIApplication.setAlternateIconName(_:)`. The alternates are declared to UIKit by the app target's
+`ASSETCATALOG_COMPILER_ALTERNATE_APPICON_NAMES` build setting, whose names must stay in step with
+`AppIconVariant.assetName` (a test asserts this).
+
+All four are drawn, not painted: `AppIconArtwork` holds the geometry as CoreGraphics, which both
+the asset-catalog PNGs and the previews in Settings render from, so a choice on that screen cannot
+drift from what lands on the home screen. Regenerate the catalog after changing the artwork:
+
+```sh
+Scripts/render-app-icons.sh
+```
+
+Each icon set is written out at every size iOS asks for rather than as a lone 1024 source. Xcode
+downscales a single source for the *primary* icon only, so an alternate declared that way compiles
+into the catalog with no icon the home screen can install, and switching to it fails at runtime.
+
 ## v1 limitations (by design)
 
 * Interrupted recordings (phone call, OS kill, reboot) are lost and the operator is informed —

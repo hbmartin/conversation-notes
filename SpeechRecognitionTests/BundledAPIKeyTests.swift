@@ -138,6 +138,7 @@ struct SettingsCredentialSourceTests {
       $0.apiKey = ""
       $0.credentialSource = .bundled
     }
+    await store.receive(\.appIconLoaded)
   }
 
   @Test
@@ -153,6 +154,7 @@ struct SettingsCredentialSourceTests {
       $0.apiKey = "operator-key"
       $0.credentialSource = .operatorKey
     }
+    await store.receive(\.appIconLoaded)
   }
 
   @Test
@@ -189,6 +191,7 @@ struct SettingsCredentialSourceTests {
     await store.send(.onAppear) {
       $0.credentialSource = .missing
     }
+    await store.receive(\.appIconLoaded)
   }
 
   @Test
@@ -205,6 +208,7 @@ struct SettingsCredentialSourceTests {
       $0.credentialSource = .operatorKeyUnavailable
       $0.errorMessage = "The operator key could not be read."
     }
+    await store.receive(\.appIconLoaded)
     #expect(store.state.credentialSource.canRemoveOperatorKey)
   }
 
