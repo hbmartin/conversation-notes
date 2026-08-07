@@ -126,6 +126,21 @@ Each icon set is written out at every size iOS asks for rather than as a lone 10
 downscales a single source for the *primary* icon only, so an alternate declared that way compiles
 into the catalog with no icon the home screen can install, and switching to it fails at runtime.
 
+## Launch performance
+
+`docs/launch-performance.md` records what launch actually costs, what was changed, and what is
+left. Two checks live outside the test target because they need a built bundle or a running
+Simulator:
+
+```sh
+Scripts/check-launch-budget.sh       # pre-main work: static ctors, +load, dylibs, embedded frameworks
+Scripts/check-launch-continuity.sh   # records a launch and asserts the launch screen paints the aurora
+Scripts/measure-launch.sh            # median launch CPU time and its spread — reports, does not gate
+```
+
+The first two are deterministic and safe to gate on. The third is not: run-to-run variance is
+around 6% on a quiet machine, so read any delta against the spread it prints.
+
 ## v1 limitations (by design)
 
 * Interrupted recordings (phone call, OS kill, reboot) are lost and the operator is informed —

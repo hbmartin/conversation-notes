@@ -101,9 +101,13 @@ The crash-recovery sweep used to end with `send(.drainQueue)`. At launch that wa
 drain could not do anything. `connectivityChanged` then sent a second `drainQueue` that did the
 real work — the `drainQueue → connectivityChanged(true) → drainQueue` sequence in the logs.
 
-The sweep now ends with `.launchRecoveryCompleted`, which drains inline. Same guarantees, one
-fewer action, and the action name no longer implies work it cannot do. Recovery never produces a
+The sweep now ends with `.launchRecoveryCompleted`, which drains inline. Recovery never produces a
 summarizable session, so nothing is lost when the inline drain finds none.
+
+This does not remove an action — launch still takes four, and `LaunchWorkTests` pins them. What it
+removes is a *lie*: the action that runs after recovery no longer claims to drain a queue it
+cannot reach. The redundant dispatch is gone; the count is the same because `connectivityChanged`
+still sends the one `drainQueue` that does the work.
 
 ### `.finish()` is documented, not changed
 
@@ -154,33 +158,53 @@ version.
    1000 sessions, so it is not urgent, but there is no upper bound today. Retention policy or
    pagination would cap it.
 
-## Reproducing the measurements
+## Automation
 
-CPU time per launch (the most reliable single signal — immune to log noise):
+The measurements above were done by hand. What is worth automating is not all of them — a CI
+Simulator stopwatch has enough variance to invent the very regression it is looking for, which is
+how the 200-session result above went wrong. So the split is: **gate on things that can be
+counted, report on things that must be timed.**
+
+### Gate on every change
+
+| What | Where | Catches |
+| --- | --- | --- |
+| The exact launch action sequence | `LaunchWorkTests` | new launch-time work, redundant round trips |
+| `State.init` reads only the feature flag | `LaunchWorkTests` | disk or network added before the first frame |
+| `Session`'s persisted field set | `LaunchWorkTests` | a fat field multiplied by session count at launch |
+| Launch colour matches the mesh; plist names it | `LaunchScreenTests` | colorset drift when the palette is edited |
+| Static initializers, non-lazy classes, dylibs, embedded frameworks | `Scripts/check-launch-budget.sh` | pre-main work: `+load`, C++ static ctors, a new dynamic framework |
+| The launch screen actually paints the aurora | `Scripts/check-launch-continuity.sh` | the white flash returning for a reason the unit tests cannot see |
+
+None of these time anything, so none of them flake. `check-launch-budget.sh` must run against a
+Release build — Debug links a stub through `SpeechRecognition.debug.dylib` and every count would
+read a meaningless zero, which the script refuses rather than reporting.
+
+`check-launch-continuity.sh` is the end-to-end complement to `LaunchScreenTests`: those tests
+prove the asset matches the mesh and that `Info.plist` names it, but neither can prove the *system
+used it*. A plist override in a build configuration or a colorset that failed to compile would
+leave them green. This one records a launch and reads the pixels, with the expected colour parsed
+out of the colorset so the check cannot drift from the asset.
+
+Both scripts have been verified against a deliberately broken build — removing `UIColorName`
+produces `26 frame(s) during launch are effectively white`, naming the cause.
+
+### Report, do not gate
 
 ```sh
-PID=$(xcrun simctl launch booted me.haroldmartin.speechrecognition | awk '{print $2}')
-sleep 6 && ps -o cputime=,rss= -p $PID
+Scripts/measure-launch.sh -n 15
 ```
 
-Call graph of the launch:
+Median launch CPU time over N runs, printed with the spread. The spread is the point: on this
+machine it runs ~6% of the median, so a delta smaller than that is not a result. Run it nightly
+and chart it; do not fail a build on it.
+
+Call graph, for when the number moves and you need to know why:
 
 ```sh
 PID=$(xcrun simctl launch booted me.haroldmartin.speechrecognition | awk '{print $2}')
 sample $PID 3 1 -f /tmp/launch-sample.txt
 ```
-
-Time to first content, and whether the launch screen still matches the first frame:
-
-```sh
-xcrun simctl io booted recordVideo --codec h264 --force /tmp/launch.mp4 &
-sleep 3 && xcrun simctl launch booted me.haroldmartin.speechrecognition
-sleep 5 && pkill -INT -f "simctl io booted recordVideo"
-ffmpeg -i /tmp/launch.mp4 -vf "fps=30,scale=180:-1" -vsync 0 /tmp/frames/f_%04d.png
-```
-
-Then read the per-frame mean colour. A large jump between the launch-screen frames and the first
-content frame means the colorset has drifted and `LaunchScreenTests` should have caught it.
 
 Seeding a realistic session count:
 
@@ -188,3 +212,22 @@ Seeding a realistic session count:
 CONT=$(xcrun simctl get_app_container booted me.haroldmartin.speechrecognition data)
 # write N sessions to "$CONT/Library/Application Support/MSLCapture/sessions.json"
 ```
+
+### Not built yet
+
+Three things would give real numbers rather than proxies, and all three change the shipping app,
+so they are followups rather than done work:
+
+- **`OSSignposter` intervals** around `State.init`, the sessions decode, and the recovery sweep,
+  exported in CI with `xctrace export --xpath` over the `os-signpost` table. This turns the
+  hand-rolled `sample` breakdown above into a repeatable artifact that attributes a regression to
+  a phase instead of just reporting a larger total.
+- **`mxSignpost` instead of plain `os_signpost`** for those same probes, so the intervals come
+  back from TestFlight builds in MetricKit payloads — one set of probes, local traces and field
+  data both.
+- **`MXAppLaunchMetric.histogrammedTimeToFirstDraw`**, which is the only thing that will answer
+  followup 1. A 24-hour-delayed histogram is a trend instrument, not a gate.
+
+`XCTApplicationLaunchMetric` is the official answer and is genuinely useful locally for a
+before/after, but it needs a UI test target this project does not have, and its baselines are
+stored per device configuration, which is painful to keep green across CI runner images.
